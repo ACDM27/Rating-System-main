@@ -1,0 +1,41 @@
+version: "3"
+services:
+  pgsql:
+    image: ccr.ccs.tencentyun.com/z5882852/postgres:latest
+    restart: always
+    container_name: rating-system-pgsql
+    environment:
+      PGUSER: ${PGUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      POSTGRES_DB: ${POSTGRES_DB:-vote}
+      PGDATA: ${PGDATA:-/var/lib/postgresql/data/pgdata}
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/pgsql:/var/lib/postgresql
+    healthcheck:
+      test: [ 'CMD', 'pg_isready' ]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  backend:
+    image: rating_system_backend:latest
+    container_name: rating-system-backend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - pgsql
+
+  frontend:
+    image: rating_system_frontend:latest
+    container_name: rating-system-frontend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "80:80"

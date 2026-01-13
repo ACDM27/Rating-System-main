@@ -1,0 +1,992 @@
+import time
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.models.user import User, UserRole
+from app.models.system_settings import SystemSettings, SystemStage
+from app.models.class_ import Class
+from app.models.score_record import ScoreRecord
+from app.models.question import Question, QuestionStatus
+from app.schemas.user import UserCreate, UserResponse, StudentCreate
+from app.schemas.system import StageSetRequest, SystemStateResponse, ScoreProgressResponse
+from app.services.auth import get_password_hash
+from app.services.score import get_score_progress
+from app.services.question import get_all_questions
+from app.models.score_record import ScorePhase
+from app.websocket import manager
+
+router = APIRouter(prefix="/admin", tags=["管理员"])
+
+
+@router.get("/users", response_model=list[UserResponse])
+async def get_users(class_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """获取班级内的所有用户（学生团队）"""
+    result = await db.execute(
+        select(User)
+        .where(User.class_id == class_id)
+        .where(User.role == UserRole.student)
+    )
+    return list(result.scalars().all())
+
+
+@router.post("/users", response_model=UserResponse)
+async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
+    """创建用户"""
+    # 检查用户名是否已存在
+    existing = await db.execute(select(User).where(User.username == data.username))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    
+    # 获取班级信息以确定工作空间
+    workspace_id = None
+    if data.class_id:
+        result = await db.execute(select(Class).where(Class.id == data.class_id))
+        class_ = result.scalar_one_or_none()
+        if class_:
+            workspace_id = class_.workspace_id
+    
+    user = User(
+        username=data.username,
+        password_hash=get_password_hash(data.password),
+        role=data.role,
+        display_name=data.display_name,
+        workspace_id=workspace_id,
+        class_id=data.class_id
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
+    """删除用户"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    await db.delete(user)
+    await db.commit()
+    return {"message": "删除成功"}
+
+
+@router.put("/students/{student_id}")
+async def update_student(student_id: int, data: dict, db: AsyncSession = Depends(get_db)):
+    """更新学生信息（仅支持修改团队名称和主题）"""
+    result = await db.execute(select(User).where(User.id == student_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="学生不存在")
+    
+    if user.role != UserRole.student:
+        raise HTTPException(status_code=400, detail="只能修改学生信息")
+    
+    if "display_name" in data and data["display_name"] is not None:
+        user.display_name = data["display_name"]
+    if "topic" in data:
+        user.topic = data["topic"] if data["topic"] else None
+    
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.post("/students/{student_id}/reset-password")
+async def reset_student_password(student_id: int, db: AsyncSession = Depends(get_db)):
+    """重置学生密码为默认密码 123456"""
+    result = await db.execute(select(User).where(User.id == student_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="学生不存在")
+    
+    if user.role != UserRole.student:
+        raise HTTPException(status_code=400, detail="只能重置学生密码")
+    
+    user.password_hash = get_password_hash("123456")
+    await db.commit()
+    
+    return {"message": "密码已重置为 123456"}
+
+
+@router.post("/students")
+async def create_student(data: StudentCreate, db: AsyncSession = Depends(get_db)):
+    """创建学生账号"""
+    if not data.class_id:
+        raise HTTPException(status_code=400, detail="班级ID不能为空")
+    
+    # 检查用户名是否已存在
+    existing = await db.execute(select(User).where(User.username == data.username))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    
+    # 获取班级信息以确定工作空间
+    result = await db.execute(select(Class).where(Class.id == data.class_id))
+    class_ = result.scalar_one_or_none()
+    if not class_:
+        raise HTTPException(status_code=404, detail="班级不存在")
+    
+    user = User(
+        username=data.username,
+        password_hash=get_password_hash(data.password),
+        role=UserRole.student,
+        display_name=data.display_name,
+        workspace_id=class_.workspace_id,
+        class_id=data.class_id,
+        topic=data.topic if data.topic else None
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.get("/state", response_model=SystemStateResponse)
+async def get_system_state(class_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """获取当前班级的系统状态"""
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    
+    if not settings:
+        # 创建该班级的默认状态
+        settings = SystemSettings(class_id=class_id)
+        db.add(settings)
+        await db.commit()
+        await db.refresh(settings)
+    
+    # 获取当前团队名称和主题
+    team_name = None
+    team_topic = None
+    if settings.current_team_id:
+        team_result = await db.execute(select(User).where(User.id == settings.current_team_id))
+        team = team_result.scalar_one_or_none()
+        if team:
+            team_name = team.display_name
+            team_topic = team.topic
+    
+    # 获取当前倒计时（如果在提问阶段）
+    current_countdown = manager.get_countdown(class_id)
+    
+    # 计算教师评分平均分（在教师评分、学生互评或结束阶段显示）
+    teacher_avg_score = None
+    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_TEACHER, SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+        avg_result = await db.execute(
+            select(func.avg(ScoreRecord.total_score))
+            .where(ScoreRecord.class_id == class_id)
+            .where(ScoreRecord.target_team_id == settings.current_team_id)
+            .where(ScoreRecord.phase == ScorePhase.teacher_eval)
+        )
+        avg_value = avg_result.scalar()
+        if avg_value is not None:
+            teacher_avg_score = round(float(avg_value), 2)
+    
+    # 计算学生评分平均分（在学生互评或结束阶段显示）
+    student_avg_score = None
+    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+        avg_result = await db.execute(
+            select(func.avg(ScoreRecord.total_score))
+            .where(ScoreRecord.class_id == class_id)
+            .where(ScoreRecord.target_team_id == settings.current_team_id)
+            .where(ScoreRecord.phase == ScorePhase.student_eval)
+        )
+        avg_value = avg_result.scalar()
+        if avg_value is not None:
+            student_avg_score = round(float(avg_value), 2)
+    
+    # 计算评分完成状态
+    from app.services.score import get_score_progress
+    
+    teacher_scoring_completed = False
+    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_TEACHER, SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+        submitted, total, _ = await get_score_progress(db, settings.current_team_id, ScorePhase.teacher_eval, class_id)
+        teacher_scoring_completed = (submitted == total and total > 0)
+        
+    student_scoring_completed = False
+    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+        submitted, total, _ = await get_score_progress(db, settings.current_team_id, ScorePhase.student_eval, class_id)
+        student_scoring_completed = (submitted == total and total > 0)
+    
+    return SystemStateResponse(
+        class_id=settings.class_id,
+        current_stage=settings.current_stage,
+        current_team_id=settings.current_team_id,
+        current_team_name=team_name,
+        current_team_topic=team_topic,
+        snatch_slots_remaining=settings.snatch_slots_remaining,
+        snatch_start_time=settings.snatch_start_time,
+        countdown=manager.get_countdown(class_id),
+        teacher_avg_score=teacher_avg_score,
+        student_avg_score=student_avg_score,
+        teacher_scoring_completed=teacher_scoring_completed,
+        student_scoring_completed=student_scoring_completed,
+        update_time=settings.update_time
+    )
+
+
+@router.post("/stage/set", response_model=SystemStateResponse)
+async def set_stage(data: StageSetRequest, class_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """设置系统阶段"""
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    
+    if not settings:
+        settings = SystemSettings(class_id=class_id)
+        db.add(settings)
+    
+    # 保存原阶段，用于判断是否从提问阶段切换出来
+    previous_stage = settings.current_stage
+    
+    settings.current_stage = data.stage
+    
+    if data.target_team_id is not None:
+        settings.current_team_id = data.target_team_id
+    
+    # 如果进入提问阶段，重置提问名额并记录开始时间（毫秒时间戳）
+    if data.stage == SystemStage.QNA_SNATCH:
+        settings.snatch_slots_remaining = 3
+        settings.snatch_start_time = int(time.time() * 1000)
+        # 启动实时倒计时广播，倒计时结束时自动分配剩余名额
+        from app.services.snatch import auto_assign_snatch_slots
+        manager.start_countdown(class_id, 30, on_complete=auto_assign_snatch_slots)
+    else:
+        # 停止倒计时
+        manager.stop_countdown(class_id)
+        
+        # 只有从提问阶段切换出来时，才执行随机分配
+        if previous_stage == SystemStage.QNA_SNATCH and settings.snatch_slots_remaining > 0 and settings.current_team_id:
+            import random
+            
+            # 获取已经获得当前团队提问机会的团队ID列表
+            snatched_result = await db.execute(
+                select(Question.asker_team_id)
+                .where(Question.class_id == class_id)
+                .where(Question.target_team_id == settings.current_team_id)
+                .where(Question.is_snatched == True)
+            )
+            snatched_team_ids = {row[0] for row in snatched_result.fetchall()}
+            
+            # 获取该班级所有学生团队（排除当前答辩团队和已获得提问机会的团队）
+            all_students_result = await db.execute(
+                select(User)
+                .where(User.class_id == class_id)
+                .where(User.role == UserRole.student)
+                .where(User.id != settings.current_team_id)
+            )
+            all_students = list(all_students_result.scalars().all())
+            
+            # 筛选出未获得提问机会的团队
+            available_teams = [s for s in all_students if s.id not in snatched_team_ids]
+            
+            # 随机选择填满剩余名额
+            slots_to_fill = min(settings.snatch_slots_remaining, len(available_teams))
+            if slots_to_fill > 0:
+                selected_teams = random.sample(available_teams, slots_to_fill)
+                
+                for team in selected_teams:
+                    # 为选中的团队创建提问记录
+                    question = Question(
+                        class_id=class_id,
+                        asker_team_id=team.id,
+                        target_team_id=settings.current_team_id,
+                        status=QuestionStatus.snatched,
+                        is_snatched=True
+                    )
+                    db.add(question)
+                    settings.snatch_slots_remaining -= 1
+                    
+                    # 广播提问更新
+                    await manager.broadcast_to_class(class_id, {
+                        "type": "SNATCH_UPDATE",
+                        "data": {
+                            "slots_remaining": settings.snatch_slots_remaining,
+                            "asker": {
+                                "id": team.id,
+                                "name": team.display_name
+                            },
+                            "is_random_assigned": True
+                        }
+                    })
+    
+    # 如果进入结束阶段，标记当前团队为已完成答辩
+    if data.stage == SystemStage.FINISHED and settings.current_team_id:
+        team_result = await db.execute(select(User).where(User.id == settings.current_team_id))
+        team = team_result.scalar_one_or_none()
+        if team:
+            team.has_presented = True
+    
+    await db.commit()
+    await db.refresh(settings)
+    
+    # 获取当前团队名称和主题
+    team_name = None
+    team_topic = None
+    team_info = None
+    if settings.current_team_id:
+        team_result = await db.execute(select(User).where(User.id == settings.current_team_id))
+        team = team_result.scalar_one_or_none()
+        if team:
+            team_name = team.display_name
+            team_topic = team.topic
+            team_info = {"id": team.id, "name": team.display_name, "topic": team.topic}
+    
+    # 计算教师评分平均分（在教师评分、学生互评或结束阶段广播）
+    teacher_avg_score = None
+    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_TEACHER, SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+        avg_result = await db.execute(
+            select(func.avg(ScoreRecord.total_score))
+            .where(ScoreRecord.class_id == class_id)
+            .where(ScoreRecord.target_team_id == settings.current_team_id)
+            .where(ScoreRecord.phase == ScorePhase.teacher_eval)
+        )
+        avg_value = avg_result.scalar()
+        if avg_value is not None:
+            teacher_avg_score = round(float(avg_value), 2)
+    
+    # 计算学生评分平均分（在学生互评或结束阶段广播）
+    student_avg_score = None
+    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+        avg_result = await db.execute(
+            select(func.avg(ScoreRecord.total_score))
+            .where(ScoreRecord.class_id == class_id)
+            .where(ScoreRecord.target_team_id == settings.current_team_id)
+            .where(ScoreRecord.phase == ScorePhase.student_eval)
+        )
+        avg_value = avg_result.scalar()
+        if avg_value is not None:
+            student_avg_score = round(float(avg_value), 2)
+    
+    # 计算评分完成状态
+    from app.services.score import get_score_progress
+    
+    teacher_scoring_completed = False
+    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_TEACHER, SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+        submitted, total, _ = await get_score_progress(db, settings.current_team_id, ScorePhase.teacher_eval, class_id)
+        teacher_scoring_completed = (submitted == total and total > 0)
+        
+    student_scoring_completed = False
+    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+        submitted, total, _ = await get_score_progress(db, settings.current_team_id, ScorePhase.student_eval, class_id)
+        student_scoring_completed = (submitted == total and total > 0)
+    
+    # 广播状态更新（带 class_id、教师平均分和学生平均分）
+    await manager.broadcast_state_update(
+        stage=settings.current_stage.value,
+        current_team=team_info,
+        snatch_remaining=settings.snatch_slots_remaining,
+        snatch_start_time=settings.snatch_start_time,
+        class_id=class_id,
+        teacher_avg_score=teacher_avg_score,
+        student_avg_score=student_avg_score,
+        teacher_scoring_completed=teacher_scoring_completed,
+        student_scoring_completed=student_scoring_completed,
+        update_time=settings.update_time
+    )
+    
+    return SystemStateResponse(
+        class_id=settings.class_id,
+        current_stage=settings.current_stage,
+        current_team_id=settings.current_team_id,
+        current_team_name=team_name,
+        current_team_topic=team_topic,
+        snatch_slots_remaining=settings.snatch_slots_remaining,
+        snatch_start_time=settings.snatch_start_time,
+        countdown=manager.get_countdown(class_id),
+        teacher_avg_score=teacher_avg_score,
+        student_avg_score=student_avg_score,
+        teacher_scoring_completed=teacher_scoring_completed,
+        student_scoring_completed=student_scoring_completed,
+        update_time=settings.update_time
+    )
+
+
+@router.get("/progress", response_model=ScoreProgressResponse)
+async def get_progress(class_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """获取当前评分进度"""
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    
+    if not settings or not settings.current_team_id:
+        return ScoreProgressResponse(submitted_count=0, total_count=0, not_submitted=[])
+    
+    # 根据当前阶段获取评分进度
+    if settings.current_stage == SystemStage.SCORING_TEACHER:
+        phase = ScorePhase.teacher_eval
+    elif settings.current_stage == SystemStage.SCORING_STUDENT:
+        phase = ScorePhase.student_eval
+    else:
+        return ScoreProgressResponse(submitted_count=0, total_count=0, not_submitted=[])
+    
+    submitted_count, total_count, not_submitted = await get_score_progress(
+        db, settings.current_team_id, phase, class_id
+    )
+    
+    return ScoreProgressResponse(
+        submitted_count=submitted_count,
+        total_count=total_count,
+        not_submitted=not_submitted
+    )
+
+
+@router.get("/teams", response_model=list[UserResponse])
+async def get_teams(class_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """获取班级内的所有学生团队"""
+    result = await db.execute(
+        select(User)
+        .where(User.class_id == class_id)
+        .where(User.role == UserRole.student)
+        .order_by(User.id)
+    )
+    return list(result.scalars().all())
+
+
+@router.get("/questions")
+async def get_questions(class_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """获取班级的所有问题（用于管理员评分）"""
+    return await get_all_questions(db, class_id)
+
+
+@router.post("/reset-system")
+async def reset_system(class_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """重置班级系统：清空该班级所有评分记录、提问记录，系统状态重置为 IDLE"""
+    # 删除该班级的评分记录
+    result = await db.execute(select(ScoreRecord).where(ScoreRecord.class_id == class_id))
+    for record in result.scalars().all():
+        await db.delete(record)
+    
+    # 删除该班级的提问记录
+    result = await db.execute(select(Question).where(Question.class_id == class_id))
+    for question in result.scalars().all():
+        await db.delete(question)
+    
+    # 重置系统状态
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    if settings:
+        settings.current_stage = SystemStage.IDLE
+        settings.current_team_id = None
+        settings.snatch_slots_remaining = 3
+        settings.snatch_start_time = None
+    
+    # 重置所有团队的答辩状态
+    result = await db.execute(select(User).where(User.class_id == class_id))
+    for user in result.scalars().all():
+        user.has_presented = False
+    
+    await db.commit()
+    
+    # 广播状态更新
+    await manager.broadcast_state_update(
+        stage=SystemStage.IDLE.value,
+        current_team=None,
+        snatch_remaining=3,
+        snatch_start_time=None,
+        class_id=class_id,
+        teacher_avg_score=None,
+        student_avg_score=None,
+        teacher_scoring_completed=False,
+        student_scoring_completed=False,
+        update_time=None
+    )
+    
+    # 停止任何可能的倒计时
+    manager.stop_countdown(class_id)
+    
+    return {"message": "系统已重置"}
+
+
+@router.post("/reset-current")
+async def reset_current(class_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """重置当前流程：清空当前队伍的评分记录、提问记录，系统状态重置为 IDLE"""
+    # 获取当前系统状态
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    
+    if not settings or not settings.current_team_id:
+        raise HTTPException(status_code=400, detail="当前没有进行中的答辩流程")
+    
+    current_team_id = settings.current_team_id
+    
+    # 删除当前队伍的评分记录
+    result = await db.execute(
+        select(ScoreRecord)
+        .where(ScoreRecord.class_id == class_id)
+        .where(ScoreRecord.target_team_id == current_team_id)
+    )
+    for record in result.scalars().all():
+        await db.delete(record)
+    
+    # 删除当前队伍的提问记录
+    result = await db.execute(
+        select(Question)
+        .where(Question.class_id == class_id)
+        .where(Question.target_team_id == current_team_id)
+    )
+    for question in result.scalars().all():
+        await db.delete(question)
+    
+    # 重置系统状态为 IDLE，但保留当前团队选择
+    settings.current_stage = SystemStage.IDLE
+    settings.snatch_slots_remaining = 3
+    settings.snatch_start_time = None
+    
+    await db.commit()
+    
+    # 获取团队信息用于广播
+    team_info = None
+    if settings.current_team_id:
+        team_result = await db.execute(select(User).where(User.id == settings.current_team_id))
+        team = team_result.scalar_one_or_none()
+        if team:
+            team_info = {"id": team.id, "name": team.display_name}
+    
+    # 广播状态更新
+    await manager.broadcast_state_update(
+        stage=SystemStage.IDLE.value,
+        current_team=team_info,
+        snatch_remaining=3,
+        snatch_start_time=None,  # Ensure broadcast includes None for start time
+        class_id=class_id,
+        teacher_avg_score=None,
+        student_avg_score=None,
+        teacher_scoring_completed=False,
+        student_scoring_completed=False,
+        update_time=None
+    )
+    
+    # 停止任何可能的倒计时
+    manager.stop_countdown(class_id)
+    
+    return {"message": "当前流程已重置"}
+
+
+@router.post("/batch-generate-students")
+async def batch_generate_students(
+    class_id: int = Query(...),
+    count: int = Query(..., ge=1, le=100),
+    db: AsyncSession = Depends(get_db)
+):
+    """批量生成学生账号（用户名: team_{随机6位字符}, 密码: 123456）"""
+    import random
+    import string
+    
+    # 获取班级信息
+    result = await db.execute(select(Class).where(Class.id == class_id))
+    class_ = result.scalar_one_or_none()
+    if not class_:
+        raise HTTPException(status_code=404, detail="班级不存在")
+    
+    async def generate_unique_username():
+        for _ in range(100):
+            random_chars = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+            username = f"team_{random_chars}"
+            check_result = await db.execute(select(User).where(User.username == username))
+            if check_result.scalar_one_or_none() is None:
+                return username
+        raise HTTPException(status_code=500, detail="无法生成唯一用户名")
+    
+    created_students = []
+    
+    for i in range(count):
+        username = await generate_unique_username()
+        student = User(
+            username=username,
+            password_hash=get_password_hash("123456"),
+            role=UserRole.student,
+            display_name=f"第{i+1}组",
+            workspace_id=class_.workspace_id,
+            class_id=class_id
+        )
+        db.add(student)
+        await db.flush()
+        
+        created_students.append({
+            "id": student.id,
+            "username": student.username,
+            "display_name": student.display_name,
+            "password": "123456"
+        })
+    
+    await db.commit()
+    
+    return {
+        "message": f"成功生成{count}个学生账号",
+        "students": created_students
+    }
+
+
+@router.get("/student-scores")
+async def get_student_scores(class_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """获取班级内所有学生团队的成绩（实时）"""
+    # 获取班级内所有学生
+    result = await db.execute(
+        select(User)
+        .where(User.class_id == class_id)
+        .where(User.role == UserRole.student)
+    )
+    students = result.scalars().all()
+    
+    # 获取系统设置以确定当前答辩状态
+    settings_result = await db.execute(
+        select(SystemSettings).where(SystemSettings.class_id == class_id)
+    )
+    settings = settings_result.scalar_one_or_none()
+    
+    scores = []
+    for student in students:
+        # 获取评委评分平均分
+        teacher_result = await db.execute(
+            select(func.avg(ScoreRecord.total_score))
+            .where(ScoreRecord.class_id == class_id)
+            .where(ScoreRecord.target_team_id == student.id)
+            .where(ScoreRecord.phase == ScorePhase.teacher_eval)
+        )
+        teacher_avg = teacher_result.scalar()
+        
+        # 获取学生互评平均分
+        student_result = await db.execute(
+            select(func.avg(ScoreRecord.total_score))
+            .where(ScoreRecord.class_id == class_id)
+            .where(ScoreRecord.target_team_id == student.id)
+            .where(ScoreRecord.phase == ScorePhase.student_eval)
+        )
+        student_avg = student_result.scalar()
+        
+        # 获取提问评分平均分
+        question_result = await db.execute(
+            select(func.avg(Question.quality_score))
+            .where(Question.class_id == class_id)
+            .where(Question.asker_team_id == student.id)
+            .where(Question.quality_score != None)
+        )
+        question_avg = question_result.scalar()
+        
+        # 计算总分
+        teacher_score = float(teacher_avg) if teacher_avg else 0
+        student_score = float(student_avg) if student_avg else 0
+        question_score = float(question_avg) if question_avg else 0
+        total_score = teacher_score + student_score + question_score
+        
+        # 获取当前答辩状态
+        defense_status = "NOT_STARTED"  # 默认未开始
+        if student.has_presented:
+            defense_status = "FINISHED"
+        elif settings and settings.current_team_id == student.id:
+            defense_status = settings.current_stage.value if settings.current_stage else "IDLE"
+        
+        scores.append({
+            "id": student.id,
+            "username": student.username,
+            "display_name": student.display_name,
+            "topic": student.topic,
+            "has_presented": student.has_presented,
+            "defense_status": defense_status,
+            "teacher_score": float(teacher_avg) if teacher_avg else None,
+            "student_score": float(student_avg) if student_avg else None,
+            "question_score": float(question_avg) if question_avg else None,
+            "total_score": total_score
+        })
+    
+    # 按总分降序排序
+    scores.sort(key=lambda x: x["total_score"], reverse=True)
+    
+    return scores
+
+
+@router.get("/snatch-rules")
+async def get_snatch_rules(class_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """获取提问规则"""
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    
+    if not settings:
+        return {"snatch_rules": "提问规则：\n• 每轮答辩共 3 个提问名额，先到先得\n• 倒计时结束后，剩余名额将随机分配\n• 提问质量将由评委评分，计入团队总成绩\n• 请认真思考后提出有价值的问题"}
+    
+    return {"snatch_rules": settings.snatch_rules or "提问规则：\n• 每轮答辩共 3 个提问名额，先到先得\n• 倒计时结束后，剩余名额将随机分配\n• 提问质量将由评委评分，计入团队总成绩\n• 请认真思考后提出有价值的问题"}
+
+
+@router.put("/snatch-rules")
+async def update_snatch_rules(
+    class_id: int = Query(...),
+    snatch_rules: str = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """更新提问规则"""
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    
+    if not settings:
+        settings = SystemSettings(class_id=class_id, snatch_rules=snatch_rules)
+        db.add(settings)
+    else:
+        settings.snatch_rules = snatch_rules
+    
+    await db.commit()
+    
+    return {"message": "提问规则已保存", "snatch_rules": snatch_rules}
+
+# 辩论赛管理端点
+
+@router.post("/debate/stage")
+async def set_debate_stage(
+    stage: SystemStage,
+    class_id: int = Query(...),
+    contest_id: int = Query(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """设置辩论阶段（互斥控制）"""
+    from app.services.system_state import update_debate_stage
+    
+    success = await update_debate_stage(db, class_id, stage, contest_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="阶段设置失败")
+    
+    return {"message": f"阶段已设置为 {stage.value}", "stage": stage.value}
+
+
+@router.get("/debate/progress")
+async def get_debate_progress_admin(
+    class_id: int = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取辩论进度（仅管理员可见）"""
+    from app.services.system_state import get_debate_progress
+    
+    progress = await get_debate_progress(db, class_id)
+    return progress
+
+
+@router.post("/debate/reveal-results")
+async def reveal_debate_results(
+    class_id: int = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """揭晓辩论结果（需要所有通道关闭）"""
+    from app.services.system_state import can_reveal_results, update_debate_stage
+    from app.services.calculation import get_calculation_service
+    
+    # 检查是否可以揭晓结果
+    can_reveal = await can_reveal_results(db, class_id)
+    if not can_reveal:
+        raise HTTPException(
+            status_code=400, 
+            detail="无法揭晓结果：请确保所有投票和评分通道已关闭"
+        )
+    
+    # 获取系统设置以获取比赛ID
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    
+    if not settings or not settings.contest_id:
+        raise HTTPException(status_code=400, detail="未找到活跃的比赛")
+    
+    # 计算比赛结果
+    calc_service = get_calculation_service(db)
+    contest_result = calc_service.calculate_contest_result(settings.contest_id)
+    
+    # 更新阶段为结果已揭晓
+    await update_debate_stage(db, class_id, SystemStage.RESULTS_REVEALED, settings.contest_id)
+    
+    # 广播结果揭晓
+    from app.websocket import manager
+    results_data = {
+        "contest_id": contest_result.contest_id,
+        "winning_team": contest_result.winning_team,
+        "pro_team_swing": contest_result.pro_team_swing,
+        "con_team_swing": contest_result.con_team_swing,
+        "total_votes_cast": contest_result.total_votes_cast,
+        "debater_rankings": [
+            {
+                "debater_id": ranking.debater_id,
+                "debater_name": ranking.debater_name,
+                "team_side": ranking.team_side,
+                "final_score": ranking.final_score,
+                "logical_reasoning_avg": ranking.logical_reasoning_avg,
+                "debate_skills_avg": ranking.debate_skills_avg,
+                "rank": ranking.rank
+            }
+            for ranking in contest_result.debater_rankings
+        ],
+        "vote_analysis": [
+            {
+                "team_side": analysis.team_side,
+                "team_name": analysis.team_name,
+                "pre_debate_votes": analysis.pre_debate_votes,
+                "post_debate_votes": analysis.post_debate_votes,
+                "swing_vote": analysis.swing_vote,
+                "vote_percentage_change": analysis.vote_percentage_change
+            }
+            for analysis in contest_result.vote_analysis
+        ]
+    }
+    
+    await manager.broadcast_results_reveal(class_id, results_data)
+    
+    return {
+        "message": "结果已揭晓",
+        "results": results_data
+    }
+
+
+@router.get("/debate/results/{contest_id}")
+async def get_debate_results(
+    contest_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """获取辩论结果（计算但不揭晓）"""
+    from app.services.calculation import get_calculation_service
+    
+    calc_service = get_calculation_service(db)
+    contest_result = calc_service.calculate_contest_result(contest_id)
+    
+    return {
+        "contest_id": contest_result.contest_id,
+        "winning_team": contest_result.winning_team,
+        "pro_team_swing": contest_result.pro_team_swing,
+        "con_team_swing": contest_result.con_team_swing,
+        "total_votes_cast": contest_result.total_votes_cast,
+        "debater_rankings": [
+            {
+                "debater_id": ranking.debater_id,
+                "debater_name": ranking.debater_name,
+                "team_side": ranking.team_side,
+                "final_score": ranking.final_score,
+                "logical_reasoning_avg": ranking.logical_reasoning_avg,
+                "debate_skills_avg": ranking.debate_skills_avg,
+                "rank": ranking.rank
+            }
+            for ranking in contest_result.debater_rankings
+        ],
+        "vote_analysis": [
+            {
+                "team_side": analysis.team_side,
+                "team_name": analysis.team_name,
+                "pre_debate_votes": analysis.pre_debate_votes,
+                "post_debate_votes": analysis.post_debate_votes,
+                "swing_vote": analysis.swing_vote,
+                "vote_percentage_change": analysis.vote_percentage_change
+            }
+            for analysis in contest_result.vote_analysis
+        ]
+    }
+
+
+@router.post("/debate/contest")
+async def create_contest(
+    topic: str = Query(...),
+    pro_team_name: str = Query(...),
+    con_team_name: str = Query(...),
+    class_id: int = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """创建新的辩论比赛"""
+    from app.models.contest import Contest
+    
+    contest = Contest(
+        class_id=class_id,
+        topic=topic,
+        pro_team_name=pro_team_name,
+        con_team_name=con_team_name
+    )
+    db.add(contest)
+    await db.commit()
+    await db.refresh(contest)
+    
+    # 更新系统设置关联到新比赛
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    
+    if not settings:
+        settings = SystemSettings(class_id=class_id, contest_id=contest.id)
+        db.add(settings)
+    else:
+        settings.contest_id = contest.id
+    
+    await db.commit()
+    
+    return {
+        "message": "比赛创建成功",
+        "contest": {
+            "id": contest.id,
+            "topic": contest.topic,
+            "pro_team_name": contest.pro_team_name,
+            "con_team_name": contest.con_team_name,
+            "created_at": contest.created_at.isoformat()
+        }
+    }
+
+
+@router.get("/debate/contest")
+async def get_current_contest(
+    class_id: int = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取当前活跃的比赛信息"""
+    from app.models.contest import Contest
+    
+    # 获取系统设置中的比赛ID
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    
+    if not settings or not settings.contest_id:
+        return {"contest": None}
+    
+    # 获取比赛信息
+    contest_result = await db.execute(select(Contest).where(Contest.id == settings.contest_id))
+    contest = contest_result.scalar_one_or_none()
+    
+    if not contest:
+        return {"contest": None}
+    
+    return {
+        "contest": {
+            "id": contest.id,
+            "topic": contest.topic,
+            "pro_team_name": contest.pro_team_name,
+            "con_team_name": contest.con_team_name,
+            "created_at": contest.created_at.isoformat()
+        }
+    }
+
+
+@router.put("/users/{user_id}/debate-role")
+async def update_user_debate_role(
+    user_id: int,
+    team_side: str = Query(None),  # "pro" or "con" or None
+    debater_position: str = Query(None),  # "first_speaker", "second_speaker", etc.
+    db: AsyncSession = Depends(get_db)
+):
+    """更新用户的辩论角色信息"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    if team_side is not None:
+        if team_side not in ["pro", "con", ""]:
+            raise HTTPException(status_code=400, detail="team_side 必须是 'pro', 'con' 或空字符串")
+        user.team_side = team_side if team_side else None
+    
+    if debater_position is not None:
+        valid_positions = ["first_speaker", "second_speaker", "third_speaker", "fourth_speaker"]
+        if debater_position and debater_position not in valid_positions:
+            raise HTTPException(status_code=400, detail=f"debater_position 必须是 {valid_positions} 之一或空字符串")
+        user.debater_position = debater_position if debater_position else None
+    
+    await db.commit()
+    await db.refresh(user)
+    
+    return {
+        "message": "用户辩论角色已更新",
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "display_name": user.display_name,
+            "role": user.role.value,
+            "team_side": user.team_side,
+            "debater_position": user.debater_position
+        }
+    }
