@@ -1,25 +1,33 @@
-FROM ccr.ccs.tencentyun.com/z5882852/node:22-alpine3.21
+# Build stage
+FROM node:20-alpine as builder
 
-# 设置工作目录
 WORKDIR /app
 
-# 全局安装 pnpm
-RUN npm install -g pnpm --registry https://registry.npmmirror.com/
+# Install pnpm
+RUN npm install -g pnpm --registry=https://registry.npmmirror.com
 
-# 复制 package.json 和 pnpm-lock.yaml（如果存在）
-COPY package.json pnpm-lock.yaml* ./
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
 
-# 安装依赖
-RUN pnpm install --frozen-lockfile --registry https://registry.npmmirror.com/
+# Install dependencies (use mirror for speed in China)
+RUN pnpm install --frozen-lockfile --registry=https://registry.npmmirror.com
 
-# 复制项目文件
+# Copy source code
 COPY . .
 
-# 构建项目
-RUN pnpm build --mode production
+# Build for production
+RUN pnpm build
 
-# 暴露端口
-EXPOSE 4173
+# Production stage
+FROM nginx:alpine
 
-# 启动预览服务器
-CMD ["pnpm", "preview", "--host", "0.0.0.0", "--port", "80"]
+# Copy build artifacts from builder stage
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Copy custom nginx config
+COPY default.conf /etc/nginx/conf.d/default.conf
+
+# Expose port 80
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

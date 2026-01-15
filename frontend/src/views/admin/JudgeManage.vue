@@ -10,6 +10,16 @@
       </div>
       <div class="header-actions">
         <el-button type="primary" @click="showCreateDialog = true">添加评委</el-button>
+        <el-button type="primary" plain @click="triggerFileInput">导入Excel</el-button>
+        <el-button link type="primary" @click="downloadTemplate">下载模板</el-button>
+        <el-button @click="showScoringCriteria = true">评分标准</el-button>
+        <input 
+          type="file" 
+          ref="fileInput" 
+          style="display: none" 
+          accept=".xlsx, .xls"
+          @change="handleFileChange"
+        />
       </div>
     </div>
 
@@ -32,46 +42,14 @@
 
     <!-- 添加评委对话框 -->
     <el-dialog v-model="showCreateDialog" title="添加评委" width="500px">
-      <el-tabs v-model="activeTab">
-        <el-tab-pane label="添加现有评委" name="existing">
-          <el-form :model="addForm" label-width="100px">
-            <el-form-item label="选择评委">
-              <el-select 
-                v-model="addForm.teacherId" 
-                placeholder="搜索评委姓名"
-                filterable
-                remote
-                :remote-method="searchEvaluators"
-                :loading="searching"
-              >
-                <el-option
-                  v-for="item in searchResults"
-                  :key="item.id"
-                  :label="item.display_name"
-                  :value="item.id"
-                >
-                  <span>{{ item.display_name }}</span>
-                  <span style="color: #8492a6; font-size: 13px; margin-left: 8px">{{ item.username }}</span>
-                </el-option>
-              </el-select>
-            </el-form-item>
-          </el-form>
-        </el-tab-pane>
-        
-        <el-tab-pane label="创建新评委" name="new">
-          <el-form :model="createForm" :rules="createRules" ref="createFormRef" label-width="100px">
-            <el-form-item label="用户名" prop="username">
-              <el-input v-model="createForm.username" placeholder="请输入用户名" />
-            </el-form-item>
-            <el-form-item label="姓名" prop="display_name">
-              <el-input v-model="createForm.display_name" placeholder="请输入真实姓名" />
-            </el-form-item>
-            <el-form-item label="密码" prop="password">
-              <el-input v-model="createForm.password" show-password placeholder="默认: 123456" />
-            </el-form-item>
-          </el-form>
-        </el-tab-pane>
-      </el-tabs>
+      <el-form :model="createForm" :rules="createRules" ref="createFormRef" label-width="100px">
+        <el-form-item label="用户名" prop="username">
+          <el-input v-model="createForm.username" placeholder="请输入用户名" />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="createForm.password" show-password placeholder="默认: 123456" />
+        </el-form-item>
+      </el-form>
       
       <template #footer>
         <span class="dialog-footer">
@@ -80,16 +58,34 @@
         </span>
       </template>
     </el-dialog>
+
+    <!-- 评分标准对话框 -->
+    <el-dialog v-model="showScoringCriteria" title="评委评分标准" width="700px">
+      <el-table :data="scoringCriteria" stripe border>
+        <el-table-column prop="dimension" label="评分维度" width="200" />
+        <el-table-column prop="maxScore" label="满分" width="100" align="center" />
+        <el-table-column prop="description" label="评分说明" />
+      </el-table>
+      
+      <template #footer>
+        <div class="dialog-footer">
+          <p style="color: #606266; font-size: 14px; margin: 10px 0;">
+            <strong>总分：100分</strong> | 评委需对每位辩手按以上六个维度独立评分
+          </p>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { useAuthStore } from '../../stores/auth'
-import { getTeachers, addTeacherToClass, createTeacher, removeTeacherFromClass, getAllTeachers } from '../../api/admin'
+import { getTeachers, createTeacher, removeTeacherFromClass, importTeachers } from '../../api/admin'
+import * as XLSX from 'xlsx'
 
 const router = useRouter()
 const route = useRoute()
@@ -104,27 +100,30 @@ const currentClassName = computed(() => {
 const loading = ref(false)
 const judges = ref([])
 const showCreateDialog = ref(false)
-const activeTab = ref('existing')
+const showScoringCriteria = ref(false)
 const saving = ref(false)
-const searching = ref(false)
-const searchResults = ref([])
-
-const addForm = ref({
-  teacherId: null
-})
+const fileInput = ref(null)
 
 const createForm = ref({
   username: '',
-  display_name: '',
   password: ''
 })
 
 const createRules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  display_name: [{ required: true, message: '请输入姓名', trigger: 'blur' }]
+  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }]
 }
 
 const createFormRef = ref(null)
+
+// 评分标准数据
+const scoringCriteria = [
+  { dimension: '语言表达', maxScore: 20, description: '吐字清晰、语速适中、表达流畅' },
+  { dimension: '逻辑推理', maxScore: 20, description: '论证严密、逻辑清晰、推理合理' },
+  { dimension: '辩论技巧', maxScore: 20, description: '攻防有度、引用恰当、策略运用' },
+  { dimension: '应变能力', maxScore: 15, description: '快速反应、灵活应对、临场发挥' },
+  { dimension: '整体意识', maxScore: 15, description: '团队配合、大局观念、战略布局' },
+  { dimension: '综合印象', maxScore: 10, description: '仪表风度、气场感染力、整体表现' }
+]
 
 onMounted(() => {
   if (classId.value) {
@@ -143,53 +142,28 @@ async function loadJudges() {
   }
 }
 
-async function searchEvaluators(query) {
-  if (!query) {
-    searchResults.value = []
-    return
-  }
-  searching.value = true
-  try {
-    // 简单的模拟搜索或获取所有后过滤
-    // 这里假设 API 支持获取所有评委，实际可能需要新的 API
-    // 暂时用 getAllTeachers 获取所有，前端过滤
-    // 假设 getAllTeachers 对应 admin.py 中的 logic
-    // 由于后端API可能变动，这里先尝试从现有逻辑推断
-    // 重新查阅代码发现 admin.py 删除了很多逻辑
-    // 我们可能需要复用现有的获取班级教师接口或者新增接口
-    
-    // 临时方案：如果 query 不为空，我们显示空列表提示用户直接创建
-    // 或者我们直接改为只支持创建模式如果"搜索"API不存在
-    searchResults.value = []
-  } finally {
-    searching.value = false
-  }
-}
-
-// 获取所有可选评委（未在这个班级的）
-async function loadAllAvailableJudges() {
-    // 这个逻辑可能复杂，简化为只支持创建
-}
-
 async function handleSave() {
   saving.value = true
   try {
-    if (activeTab.value === 'existing') {
-       if (!addForm.value.teacherId) return
-       await addTeacherToClass(classId.value, addForm.value.teacherId)
-       ElMessage.success('添加成功')
-    } else {
-       if (!createFormRef.value) return
-       await createFormRef.value.validate()
-       
-       await createTeacher({
-           ...createForm.value,
-           class_id: classId.value
-       })
-       ElMessage.success('创建并添加成功')
-    }
+    if (!createFormRef.value) return
+    await createFormRef.value.validate()
+    
+    await createTeacher({
+      username: createForm.value.username,
+      password: createForm.value.password || '123456',
+      display_name: createForm.value.username, // 自动设置显示名称为用户名
+      role: 'judge', // 设置角色为评委
+      class_id: classId.value
+    })
+    ElMessage.success('创建并添加成功')
     showCreateDialog.value = false
     loadJudges()
+    
+    // 重置表单
+    createForm.value = {
+      username: '',
+      password: ''
+    }
   } catch (error) {
     ElMessage.error('操作失败: ' + (error.detail || '未知错误'))
   } finally {
@@ -206,6 +180,80 @@ async function handleRemove(user) {
     ElMessage.error('移除失败')
   }
 }
+
+// 触发文件选择
+function triggerFileInput() {
+  fileInput.value.click()
+}
+
+// 下载Excel导入模板
+function downloadTemplate() {
+  const template = [
+    ['用户名', '密码'],
+    ['judge001', '123456'],
+    ['judge002', '123456'],
+  ]
+  
+  const ws = XLSX.utils.aoa_to_sheet(template)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, '评委导入模板')
+  XLSX.writeFile(wb, '评委导入模板.xlsx')
+  ElMessage.success('模板下载成功')
+}
+
+// 处理Excel文件选择
+async function handleFileChange(event) {
+  const file = event.target.files[0]
+  if (!file) return
+  
+  const reader = new FileReader()
+  reader.onload = async (e) => {
+    try {
+      const data = new Uint8Array(e.target.result)
+      const workbook = XLSX.read(data, { type: 'array' })
+      const sheetName = workbook.SheetNames[0]
+      const worksheet = workbook.Sheets[sheetName]
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 })
+      
+      // 跳过表头
+      const judges = jsonData.slice(1)
+        .filter(row => row[0]) // 确保用户名存在
+        .map(row => ({
+          username: row[0],
+          display_name: row[0], // 自动设置显示名称为用户名
+          password: row[1] || '123456',
+          role: 'judge', // 设置角色为评委
+          class_id: classId.value
+        }))
+      
+      if (judges.length === 0) {
+        ElMessage.warning('Excel文件中没有有效数据')
+        return
+      }
+      
+      await ElMessageBox.confirm(
+        `将导入 ${judges.length} 个评委账号，是否继续？`,
+        '确认导入',
+        { type: 'warning' }
+      )
+      
+      const loadingMsg = ElMessage.loading('正在导入...')
+      await importTeachers({ judges })
+      loadingMsg.close()
+      
+      ElMessage.success(`成功导入 ${judges.length} 个评委账号`)
+      loadJudges()
+      
+    } catch (error) {
+      ElMessage.error('导入失败: ' + (error.message || '未知错误'))
+    } finally {
+      // 清空 input 允许重复选择同一文件
+      event.target.value = ''
+    }
+  }
+  reader.readAsArrayBuffer(file)
+}
+
 </script>
 
 <style scoped>
@@ -226,6 +274,11 @@ async function handleRemove(user) {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
 }
 
 .page-title {

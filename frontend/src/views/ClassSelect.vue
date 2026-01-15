@@ -50,10 +50,7 @@ const systemStore = useSystemStore()
 const classes = computed(() => authStore.availableClasses)
 
 onMounted(() => {
-  // 如果没有可选班级且是管理员，直接跳转到班级管理页面
-  if (classes.value.length === 0 && authStore.user?.role === 'admin') {
-    router.push('/admin/classes')
-  }
+  // 移除自动跳转，防止跳到不存在的路由
 })
 
 async function handleSelectClass(cls) {

@@ -11,6 +11,7 @@
             placeholder="请输入管理员账号"
             size="large"
             :prefix-icon="User"
+            autocomplete="off"
           />
         </el-form-item>
         
@@ -22,6 +23,7 @@
             size="large"
             :prefix-icon="Lock"
             show-password
+            autocomplete="new-password"
           />
         </el-form-item>
         
@@ -188,7 +190,7 @@ async function handleLogin() {
       return
     }
     
-    router.push('/class-select')
+    router.push('/admin/debate')
   } catch (error) {
     ElMessage.error(error.detail || '登录失败')
   } finally {
@@ -224,7 +226,7 @@ async function handleChangePassword() {
     localStorage.setItem('needChangePassword', 'false')
     
     // 继续进入系统
-    router.push('/class-select')
+    router.push('/admin/debate')
   } catch (error) {
     ElMessage.error(error.detail || '密码修改失败')
   } finally {

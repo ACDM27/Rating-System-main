@@ -1,41 +1,54 @@
 version: "3"
+
 services:
   pgsql:
-    image: ccr.ccs.tencentyun.com/z5882852/postgres:latest
+    image: postgres:15-alpine
     restart: always
     container_name: rating-system-pgsql
     environment:
-      PGUSER: ${PGUSER:-postgres}
+      POSTGRES_USER: ${PGUSER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
       POSTGRES_DB: ${POSTGRES_DB:-vote}
-      PGDATA: ${PGDATA:-/var/lib/postgresql/data/pgdata}
       TZ: Asia/Shanghai
     ports:
       - "5432:5432"
     volumes:
-      - ./data/pgsql:/var/lib/postgresql
+      - ./data/pgsql:/var/lib/postgresql/data
     healthcheck:
-      test: [ 'CMD', 'pg_isready' ]
-      interval: 1s
-      timeout: 3s
-      retries: 30
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   backend:
-    image: rating_system_backend:latest
+    build:
+      context: ./backend
     container_name: rating-system-backend
     restart: always
+    environment:
+      # Database Configuration
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: pgsql
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${PGUSER:-postgres}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      DATABASE_NAME: ${POSTGRES_DB:-vote}
+      # Timezone
+      TZ: Asia/Shanghai
     env_file:
       - .env
     ports:
       - "8000:8000"
     depends_on:
-      - pgsql
+      pgsql:
+        condition: service_healthy
 
   frontend:
-    image: rating_system_frontend:latest
+    build:
+      context: ./frontend
     container_name: rating-system-frontend
     restart: always
-    env_file:
-      - .env
     ports:
       - "80:80"
+    depends_on:
+      - backend

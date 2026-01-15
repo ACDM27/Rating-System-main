@@ -5,9 +5,15 @@
       <div class="contest-info">
         <h2 class="contest-title">{{ contestInfo?.topic || '辩论赛评分' }}</h2>
         <div class="teams">
-          <span class="team pro">{{ contestInfo?.pro_team_name || '正方' }}</span>
+          <div class="team-wrapper">
+             <span class="team pro">{{ contestInfo?.pro_team_name || '正方' }}</span>
+             <span class="sub-topic" v-if="contestInfo?.pro_topic">{{ contestInfo.pro_topic }}</span>
+          </div>
           <span class="vs">VS</span>
-          <span class="team con">{{ contestInfo?.con_team_name || '反方' }}</span>
+          <div class="team-wrapper">
+             <span class="team con">{{ contestInfo?.con_team_name || '反方' }}</span>
+             <span class="sub-topic" v-if="contestInfo?.con_topic">{{ contestInfo.con_topic }}</span>
+          </div>
         </div>
       </div>
       <div class="judge-info">
@@ -364,6 +370,14 @@ watch(() => systemStore.currentStage, (newStage) => {
   }
 })
 
+// 监听系统更新时间（用于同步比赛信息更迭）
+watch(() => systemStore.updateTime, async () => {
+  console.log('System state updated, reloading contest info...')
+  await loadContestInfo()
+  await loadDebaters()
+  await loadSubmittedScores()
+})
+
 async function loadContestInfo() {
   try {
     const result = await getCurrentContest(authStore.currentClassId)
@@ -414,10 +428,16 @@ function toggleDebater(debaterId) {
 
 function getPositionText(position) {
   const positions = {
-    first_speaker: '一辞',
-    second_speaker: '二辞',
-    third_speaker: '三辞',
-    fourth_speaker: '四辞'
+    // 新格式
+    first_debater: '一辩',
+    second_debater: '二辩',
+    third_debater: '三辩',
+    fourth_debater: '四辩',
+    // 旧格式（兼容）
+    first_speaker: '一辩',
+    second_speaker: '二辩',
+    third_speaker: '三辩',
+    fourth_speaker: '四辩'
   }
   return positions[position] || position
 }
@@ -749,5 +769,20 @@ function handleLogout() {
     font-size: 16px;
     height: 44px;
   }
+}
+
+.team-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.sub-topic {
+  font-size: 11px;
+  color: rgba(255,255,255,0.7);
+  margin-top: 2px;
+  text-align: center;
+  max-width: 140px;
+  line-height: 1.2;
 }
 </style>

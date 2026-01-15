@@ -1,0 +1,4 @@
+Current columns: ['id', 'class_id', 'topic', 'pro_team_name', 'con_team_name', 'created_at', 'pro_topic', 'con_topic']
+pro_topic already exists.
+con_topic already exists.
+Database schema updated successfully.

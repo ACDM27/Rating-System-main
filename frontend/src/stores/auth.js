@@ -33,8 +33,8 @@ export const useAuthStore = defineStore('auth', () => {
         localStorage.setItem('needChangePassword', String(response.need_change_password || false))
         localStorage.setItem('needSetTopic', String(response.need_set_topic || false))
 
-        // 学生自动设置班级
-        if (user.value.role === 'student' && response.available_classes.length > 0) {
+        // 学生和观众自动设置班级（他们只属于一个班级）
+        if ((user.value.role === 'student' || user.value.role === 'audience') && response.available_classes.length > 0) {
             currentClassId.value = response.available_classes[0].id
             currentClassName.value = response.available_classes[0].name
             localStorage.setItem('currentClassId', String(currentClassId.value))

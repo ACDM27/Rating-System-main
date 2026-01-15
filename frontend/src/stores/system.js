@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getSystemState } from '../api/admin'
+import { getDebateProgress } from '../api/debate'
 import { useAuthStore } from './auth'
 
 export const useSystemStore = defineStore('system', () => {
@@ -13,6 +14,10 @@ export const useSystemStore = defineStore('system', () => {
     const debateProgress = ref(null) // 辩论进度信息
 
     let ws = null
+    let pingInterval = null
+    // 标志位：是否正在连接中 / 是否手动断开
+    let isConnecting = false
+    let isManualDisconnect = false
 
     async function fetchState() {
         const authStore = useAuthStore()
@@ -45,10 +50,36 @@ export const useSystemStore = defineStore('system', () => {
         }
     }
 
-    // 标志位：是否正在连接中 / 是否手动断开
-    let isConnecting = false
-    let isManualDisconnect = false
-    let pingInterval = null
+    async function fetchDebateProgress() {
+        const authStore = useAuthStore()
+        const classId = authStore.currentClassId
+
+        console.log('[fetchDebateProgress] 开始获取辩论进度, classId:', classId)
+
+        if (!classId) {
+            console.warn('未选择班级，无法获取辩论进度')
+            return
+        }
+
+        try {
+            console.log('[fetchDebateProgress] 调用 API...')
+            // 使用静态导入的函数
+            const progress = await getDebateProgress(classId)
+            console.log('[fetchDebateProgress] API 返回数据:', progress)
+
+            // 确保 progress 是有效对象
+            if (progress && typeof progress === 'object') {
+                debateProgress.value = progress
+                console.log('[fetchDebateProgress] debateProgress 已更新:', debateProgress.value)
+            } else {
+                throw new Error('API 返回数据格式无效')
+            }
+        } catch (error) {
+            console.error('获取辩论进度失败 - 详细错误:', error)
+            // 设置一个错误标记，方便前端显示
+            debateProgress.value = { error: error.message || '未知错误' }
+        }
+    }
 
     function connectWebSocket() {
         const authStore = useAuthStore()
@@ -59,7 +90,17 @@ export const useSystemStore = defineStore('system', () => {
             return
         }
 
+        // 如果没有选择班级，不进行连接
+        if (!classId) {
+            console.log('未选择班级，暂不连接 WebSocket')
+            return
+        }
+
         // 构建 WebSocket URL，带 class_id 参数
+        // 修正：使用 location.host 包含端口，如果需要在开发环境使用特定端口需注意
+        // 假设 socket 端口也是 8000 (根据之前的信息 python -m uvicorn ... --port 8000)
+        // 如果前端是 5173，后端是 8000，则需要写死或配置
+        // 之前代码是 `ws://${window.location.hostname}:8000/ws`，保持一致
         let wsUrl = `ws://${window.location.hostname}:8000/ws`
         if (classId) {
             wsUrl += `?class_id=${classId}`
@@ -133,9 +174,14 @@ export const useSystemStore = defineStore('system', () => {
     }
 
     function handleMessage(message) {
+        console.log('WebSocket 收到消息:', message)
+
         switch (message.type) {
+            case 'STATE_UPDATE':
             case 'state_update':
-                currentStage.value = message.data.stage
+                console.log('处理状态更新:', message.data)
+                // 支持两种字段名：stage 和 current_stage
+                currentStage.value = message.data.current_stage || message.data.stage
                 currentTeam.value = message.data.current_team
                 snatchSlotsRemaining.value = message.data.snatch_slots_remaining
                 snatchStartTime.value = message.data.snatch_start_time || null
@@ -143,6 +189,16 @@ export const useSystemStore = defineStore('system', () => {
                 if (currentStage.value !== 'QNA_SNATCH') {
                     countdown.value = 0
                 }
+                console.log('状态已更新, currentStage:', currentStage.value)
+                break
+            case 'debate_update':
+                console.log('处理辩论状态更新:', message.data)
+                currentStage.value = message.data.stage
+                // 直接更新辩论进度，避免额外 API 请求
+                if (message.data.progress) {
+                    debateProgress.value = message.data.progress
+                }
+                console.log('辩论状态已更新, currentStage:', currentStage.value)
                 break
             case 'SCORE_PROGRESS':
                 scoreProgress.value = {
@@ -180,24 +236,6 @@ export const useSystemStore = defineStore('system', () => {
     function reconnect() {
         disconnect()
         connectWebSocket()
-    }
-
-    async function fetchDebateProgress() {
-        const authStore = useAuthStore()
-        const classId = authStore.currentClassId
-
-        if (!classId) {
-            console.warn('未选择班级，无法获取辩论进度')
-            return
-        }
-
-        try {
-            const { getDebateProgress } = await import('../api/debate')
-            const progress = await getDebateProgress(classId)
-            debateProgress.value = progress
-        } catch (error) {
-            console.error('获取辩论进度失败:', error)
-        }
     }
 
     return {

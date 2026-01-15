@@ -40,6 +40,12 @@ const routes = [
         meta: { requiresAuth: true, role: 'admin' }
     },
     {
+        path: '/admin/debaters',
+        name: 'AdminDebaters',
+        component: () => import('../views/admin/DebaterManage.vue'),
+        meta: { requiresAuth: true, role: 'admin', requiresClass: true }
+    },
+    {
         path: '/admin/debate',
         name: 'AdminDebate',
         component: () => import('../views/admin/DebateDashboard.vue'),

@@ -6,13 +6,8 @@ export function submitJudgeScore(scoreData) {
 }
 
 // 获取评委的评分记录
-export function getJudgeScores(contestId, judgeId) {
-  return request.get('/judge-scores/my-scores', {
-    params: {
-      contest_id: contestId,
-      judge_id: judgeId
-    }
-  })
+export function getJudgeScores(contestId) {
+  return request.get(`/judge-scores/my-scores/${contestId}`)
 }
 
 // 获取辞手的所有评分

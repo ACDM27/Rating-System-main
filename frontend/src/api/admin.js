@@ -27,6 +27,10 @@ export function createTeacher(data) {
     return api.post('/admin/teachers', data)
 }
 
+export function importTeachers(data) {
+    return api.post('/admin/teachers/import', data)
+}
+
 export function addTeacherToClass(classId, teacherId) {
     return api.post(`/admin/teachers/add`, null, { params: { class_id: classId, teacher_id: teacherId } })
 }

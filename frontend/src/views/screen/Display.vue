@@ -1,31 +1,26 @@
 <template>
   <div class="screen-container">
-    <!-- 左上角班级选择 -->
-    <div class="class-selector">
-      <el-select 
-        v-model="currentClassId" 
-        placeholder="选择班级" 
-        size="large"
-        @change="handleClassChange"
-      >
-        <el-option 
-          v-for="cls in classes" 
-          :key="cls.id" 
-          :label="cls.name" 
-          :value="cls.id"
-        />
-      </el-select>
+    <!-- 错误提示：缺少比赛ID -->
+    <div v-if="!contestIdFromUrl" class="error-state">
+      <h2>❌ 缺少比赛ID</h2>
+      <p>请从管理端点击"打开大屏"按钮</p>
+      <p class="example">或访问: /screen?contest_id=1</p>
     </div>
     
-    <div v-if="!currentClassId" class="no-class">
-      <h2>请选择班级</h2>
+    <!-- 加载状态 -->
+    <div v-else-if="loading" class="loading-state">
+      <el-icon class="loading-icon"><Loading /></el-icon>
+      <p>加载比赛数据中...</p>
+    </div>
+    
+    <!-- 比赛不存在 -->
+    <div v-else-if="!contestInfo" class="error-state">
+      <h2>❌ 比赛不存在</h2>
+      <p>比赛ID: {{ contestIdFromUrl }}</p>
     </div>
     
     <template v-else>
       <!-- 头部信息 -->
-      <div class="header">
-        <div class="class-name">{{ currentClassName }}</div>
-      </div>
       
       <!-- 辩论赛模式 -->
       <template v-if="isDebateMode">
@@ -37,19 +32,18 @@
               <div class="team pro-team">
                 <span class="team-label">正方</span>
                 <span class="team-name">{{ contestInfo.pro_team_name }}</span>
+                <div class="team-topic" v-if="contestInfo.pro_topic">{{ contestInfo.pro_topic }}</div>
               </div>
               <div class="vs-divider">VS</div>
               <div class="team con-team">
                 <span class="team-label">反方</span>
                 <span class="team-name">{{ contestInfo.con_team_name }}</span>
+                <div class="team-topic" v-if="contestInfo.con_topic">{{ contestInfo.con_topic }}</div>
               </div>
             </div>
           </div>
           
-          <div class="stage-display">
-            <span class="stage-label">当前阶段</span>
-            <span class="stage-value" :class="debateStageClass">{{ debateStageText }}</span>
-          </div>
+
         </div>
 
         <!-- 主内容区域 - 辩论赛 -->
@@ -58,7 +52,7 @@
           <div v-if="stage === 'PRE_VOTING' || stage === 'POST_VOTING'" class="voting-state">
             <div class="qr-section">
               <div class="qr-placeholder">
-                <el-icon class="qr-icon"><QrCode /></el-icon>
+                <el-icon class="qr-icon"><Expand /></el-icon>
                 <p>扫码参与投票</p>
               </div>
             </div>
@@ -104,59 +98,100 @@
           </div>
 
           <!-- 结果揭晓 -->
-          <div v-else-if="stage === 'RESULTS_REVEALED'" class="results-state">
-            <div class="results-title">比赛结果</div>
-            
-            <div v-if="contestResults" class="results-content">
-              <!-- 获胜队伍 -->
-              <div class="winner-section">
-                <h3>获胜队伍</h3>
-                <div class="winner-display" :class="contestResults.winning_team">
-                  <span v-if="contestResults.winning_team === 'pro'" class="winner-name">
-                    {{ contestInfo?.pro_team_name }} (正方)
-                  </span>
-                  <span v-else-if="contestResults.winning_team === 'con'" class="winner-name">
-                    {{ contestInfo?.con_team_name }} (反方)
-                  </span>
-                  <span v-else class="winner-name">平局</span>
+          <!-- 结果揭晓 (UI UX Pro Max) -->
+          <div v-else-if="stage === 'RESULTS_REVEALED'" class="results-state-max">
+            <div class="results-header">
+               <div class="winner-label">🏆 获胜队伍 🏆</div>
+               <div class="winner-name-max" :class="contestResults?.winning_team">
+                  {{ contestResults?.winning_team === 'pro' ? contestInfo?.pro_team_name : 
+                     contestResults?.winning_team === 'con' ? contestInfo?.con_team_name : '平局' }}
+               </div>
+            </div>
+
+            <div v-if="contestResults" class="results-content-max">
+              <!-- 左侧：观众投票评分 -->
+              <div class="result-card glass-panel vote-panel">
+                <h3 class="panel-title">👥 观众投票评分</h3>
+                <div class="vote-swing-container">
+                  <div class="team-vote-row pro">
+                     <div class="team-name-large">{{ contestInfo?.pro_team_name }}</div>
+                     
+                     <div class="vote-stats-grid">
+                        <div class="stat-box">
+                            <div class="stat-label">赛前</div>
+                            <div class="stat-val">{{ contestResults.vote_analysis[0].pre_debate_votes }}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">赛后</div>
+                            <div class="stat-val">{{ contestResults.vote_analysis[0].post_debate_votes }}</div>
+                        </div>
+                        <div class="stat-box highlight">
+                            <div class="stat-label">跑票</div>
+                            <div class="stat-val" :class="{positive: contestResults.pro_team_swing > 0, negative: contestResults.pro_team_swing < 0}">
+                                {{ contestResults.pro_team_swing > 0 ? '+' : '' }}{{ contestResults.pro_team_swing }}
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">增长率</div>
+                            <div class="stat-val">{{ formatRate(contestResults.vote_analysis[0].growth_rate) }}</div>
+                        </div>
+                     </div>
+                  </div>
+                  <div class="vs-divider-mini">VS</div>
+                  <div class="team-vote-row con">
+                     <div class="team-name-large">{{ contestInfo?.con_team_name }}</div>
+                     
+                     <div class="vote-stats-grid">
+                        <div class="stat-box">
+                            <div class="stat-label">赛前</div>
+                            <div class="stat-val">{{ contestResults.vote_analysis[1].pre_debate_votes }}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">赛后</div>
+                            <div class="stat-val">{{ contestResults.vote_analysis[1].post_debate_votes }}</div>
+                        </div>
+                        <div class="stat-box highlight">
+                            <div class="stat-label">跑票</div>
+                            <div class="stat-val" :class="{positive: contestResults.con_team_swing > 0, negative: contestResults.con_team_swing < 0}">
+                                {{ contestResults.con_team_swing > 0 ? '+' : '' }}{{ contestResults.con_team_swing }}
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">增长率</div>
+                            <div class="stat-val">{{ formatRate(contestResults.vote_analysis[1].growth_rate) }}</div>
+                        </div>
+                     </div>
+                  </div>
                 </div>
               </div>
 
-              <!-- 跑票统计 -->
-              <div class="vote-analysis">
-                <h3>跑票统计</h3>
-                <div class="swing-votes">
-                  <div class="swing-item pro">
-                    <span class="team">{{ contestInfo?.pro_team_name }}</span>
-                    <span class="swing-value" :class="{ positive: contestResults.pro_team_swing > 0 }">
-                      {{ contestResults.pro_team_swing > 0 ? '+' : '' }}{{ contestResults.pro_team_swing }}
-                    </span>
-                  </div>
-                  <div class="swing-item con">
-                    <span class="team">{{ contestInfo?.con_team_name }}</span>
-                    <span class="swing-value" :class="{ positive: contestResults.con_team_swing > 0 }">
-                      {{ contestResults.con_team_swing > 0 ? '+' : '' }}{{ contestResults.con_team_swing }}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 辞手排名 -->
-              <div class="debater-rankings" v-if="contestResults.debater_rankings?.length > 0">
-                <h3>辞手排名</h3>
-                <div class="rankings-list">
+              <!-- 右侧：优秀辩手排行榜 (Top 4) -->
+              <div class="result-card glass-panel rank-panel">
+                <h3 class="panel-title">🌟 优秀辩手排行榜</h3>
+                <div class="rank-list-max">
                   <div 
-                    v-for="(debater, index) in contestResults.debater_rankings.slice(0, 5)" 
+                    v-for="(debater, index) in contestResults.debater_rankings.slice(0, 4)" 
                     :key="debater.debater_id"
-                    class="ranking-item"
-                    :class="{ first: index === 0, second: index === 1, third: index === 2 }"
+                    class="rank-row"
+                    :class="'rank-' + (index + 1)"
+                    :style="{'--delay': index * 0.15 + 's'}"
                   >
-                    <span class="rank">{{ debater.rank }}</span>
-                    <span class="name">{{ debater.debater_name }}</span>
-                    <span class="team-side" :class="debater.team_side">
-                      {{ debater.team_side === 'pro' ? '正方' : '反方' }}
-                    </span>
-                    <span class="score">{{ debater.final_score }}</span>
+                    <div class="rank-num">{{ index + 1 }}</div>
+                    <div class="debater-avatar-placeholder">
+                       {{ debater.debater_name.charAt(0) }}
+                    </div>
+                    <div class="debater-info">
+                       <span class="d-name">{{ debater.debater_name }}</span>
+                       <div class="d-team-info">
+                           <span class="d-team-badge" :class="debater.team_side">
+                              {{ debater.team_side === 'pro' ? '正方' : '反方' }}
+                           </span>
+                           <span class="d-team-name-text">
+                              {{ debater.team_side === 'pro' ? contestInfo?.pro_team_name : contestInfo?.con_team_name }}
+                           </span>
+                       </div>
+                    </div>
+                    <div class="final-score">{{ debater.final_score }} <span class="unit">分</span></div>
                   </div>
                 </div>
               </div>
@@ -293,17 +328,16 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { QrCode, Loading } from '@element-plus/icons-vue'
-import { getClasses } from '../../api/class'
-import { getSystemState, getQuestions } from '../../api/admin'
-import { getCurrentContest, getDebateResults } from '../../api/debate'
+import { Expand, Loading, ChatDotRound, Clock } from '@element-plus/icons-vue'
+import { getSystemState } from '../../api/admin'
+import { getContestById, getDebateResults } from '../../api/debate'
 
 const route = useRoute()
 const router = useRouter()
 
-const classes = ref([])
-const currentClassId = ref(null)
-const currentClassName = ref('')
+// 从URL获取比赛ID
+const contestIdFromUrl = ref(null)
+const loading = ref(true)
 const stage = ref('IDLE')
 const currentTeam = ref(null)
 const snatchRemaining = ref(3)
@@ -318,11 +352,11 @@ const updateTime = ref(null)
 const elapsedTime = ref(null)
 
 // 辩论赛相关状态
-const isDebateMode = ref(false)
 const contestInfo = ref(null)
 const contestResults = ref(null)
 const debateProgress = ref({})
 const totalVotes = ref(0)
+const isDebateMode = computed(() => !!contestInfo.value)
 
 let elapsedTimer = null
 let ws = null
@@ -364,19 +398,13 @@ const stageClass = computed(() => {
 })
 
 onMounted(async () => {
-  await loadClasses()
-  
-  // 从 URL 参数获取 class_id
-  const classIdFromUrl = route.query.class_id
-  if (classIdFromUrl) {
-    currentClassId.value = parseInt(classIdFromUrl)
-    const cls = classes.value.find(c => c.id === currentClassId.value)
-    if (cls) {
-      currentClassName.value = cls.name
-      await fetchState()
-      await checkDebateMode()
-      connectWebSocket()
-    }
+  // 从 URL 参数获取 contest_id
+  const contestId = route.query.contest_id
+  if (contestId) {
+    contestIdFromUrl.value = parseInt(contestId)
+    await loadContestData()
+  } else {
+    loading.value = false
   }
 })
 
@@ -387,57 +415,33 @@ onUnmounted(() => {
   stopElapsedTimer()
 })
 
-watch(currentClassId, (newVal) => {
-  if (newVal) {
-    router.replace({ query: { ...route.query, class_id: newVal } })
-  }
-})
-
-// Removed watch for stage change and startCountdown
-
-async function loadClasses() {
+// 加载比赛数据
+async function loadContestData() {
   try {
-    const workspaceId = route.query.workspace_id || 1
-    classes.value = await getClasses(workspaceId)
-  } catch (error) {
-    console.error('获取班级列表失败:', error)
-  }
-}
-
-async function handleClassChange(classId) {
-  const cls = classes.value.find(c => c.id === classId)
-  if (cls) {
-    currentClassName.value = cls.name
+    loading.value = true
+    // 根据 contest_id 获取比赛信息
+    contestInfo.value = await getContestById(contestIdFromUrl.value)
+    console.log('比赛信息已加载:', contestInfo.value)
     
-    if (ws) {
-      ws.close()
-    }
-    
-    await fetchState()
-    await checkDebateMode()
-    connectWebSocket()
-  }
-}
-
-async function checkDebateMode() {
-  try {
-    const result = await getCurrentContest(currentClassId.value)
-    if (result.contest) {
-      isDebateMode.value = true
-      contestInfo.value = result.contest
+    if (contestInfo.value) {
+      // 获取系统状态（使用比赛的 class_id）
+      await fetchState()
+      console.log('系统状态:', stage.value)
       
       // 如果结果已揭晓，获取比赛结果
       if (stage.value === 'RESULTS_REVEALED') {
+        console.log('正在加载比赛结果...')
         await loadContestResults()
+        console.log('比赛结果已加载:', contestResults.value)
       }
-    } else {
-      isDebateMode.value = false
-      contestInfo.value = null
-      contestResults.value = null
+      
+      // 连接WebSocket
+      connectWebSocket()
     }
   } catch (error) {
-    console.error('检查辩论模式失败:', error)
-    isDebateMode.value = false
+    console.error('加载比赛数据失败:', error)
+  } finally {
+    loading.value = false
   }
 }
 
@@ -446,14 +450,17 @@ async function loadContestResults() {
   
   try {
     contestResults.value = await getDebateResults(contestInfo.value.id)
+    console.log('获取到比赛结果:', contestResults.value)
   } catch (error) {
     console.error('获取比赛结果失败:', error)
   }
 }
 
 async function fetchState() {
+  if (!contestInfo.value) return
+  
   try {
-    const state = await getSystemState(currentClassId.value)
+    const state = await getSystemState(contestInfo.value.class_id)
     stage.value = state.current_stage
     currentTeam.value = state.current_team_id ? {
       id: state.current_team_id,
@@ -501,9 +508,9 @@ async function fetchState() {
 }
 
 async function fetchQuestions() {
-  if (!currentTeam.value) return
+  if (!currentTeam.value || !contestInfo.value) return
   try {
-    const allQuestions = await getQuestions(currentClassId.value)
+    const allQuestions = await getQuestions(contestInfo.value.class_id)
     // 过滤出当前团队的问题
     questions.value = allQuestions.filter(q => q.target_team_id === currentTeam.value.id)
   } catch (error) {
@@ -536,6 +543,12 @@ function stopElapsedTimer() {
   elapsedTime.value = null
 }
 
+// 格式化增长率
+function formatRate(rate) {
+  if (rate === Infinity || rate > 9999) return '∞'
+  return (rate || 0).toFixed(1) + '%'
+}
+
 // 格式化已用时间（秒 -> 分:秒）
 function formatElapsedTime(seconds) {
   if (seconds === null || seconds < 0) return '--:--'
@@ -545,7 +558,9 @@ function formatElapsedTime(seconds) {
 }
 
 function connectWebSocket() {
-  const wsUrl = `ws://${window.location.hostname}:8000/ws?class_id=${currentClassId.value}`
+  if (!contestInfo.value) return
+  
+  const wsUrl = `ws://${window.location.hostname}:8000/ws?class_id=${contestInfo.value.class_id}`
   ws = new WebSocket(wsUrl)
   
   ws.onmessage = (event) => {
@@ -556,7 +571,7 @@ function connectWebSocket() {
   ws.onclose = () => {
     console.log('WebSocket 断开，5秒后重连...')
     setTimeout(() => {
-      if (currentClassId.value) {
+      if (contestInfo.value) {
         connectWebSocket()
       }
     }, 5000)
@@ -681,13 +696,37 @@ async function openCountdownPopup() {
 }
 
 function handleMessage(message) {
-  switch (message.type) {
+  // 统一转换 type 为小写以兼容后端可能的大写类型
+  const msgType = message.type ? message.type.toLowerCase() : ''
+  
+  switch (msgType) {
     case 'state_update':
-      stage.value = message.data.stage
-      currentTeam.value = message.data.current_team
-      snatchRemaining.value = message.data.snatch_slots_remaining
+      // 兼容 stage 和 current_stage 字段
+      const newStage = message.data.stage || message.data.current_stage
+      if (newStage) {
+        stage.value = newStage
+        
+        // 如果状态变为结果揭晓，立即加载结果数据
+        if (stage.value === 'RESULTS_REVEALED') {
+          console.log('状态变为已揭晓，主动加载结果数据...')
+          loadContestResults()
+        }
+      }
+      
+      if (message.data.current_team) {
+        currentTeam.value = message.data.current_team
+      }
+      
+      if (message.data.snatch_slots_remaining !== undefined) {
+        snatchRemaining.value = message.data.snatch_slots_remaining
+      }
+      
       snatchStartTime.value = message.data.snatch_start_time || null
-      countdown.value = message.data.countdown || 0
+      
+      if (message.data.countdown !== undefined) {
+        countdown.value = message.data.countdown || 0
+      }
+      
       teacherAvgScore.value = message.data.teacher_avg_score ?? null
       studentAvgScore.value = message.data.student_avg_score ?? null
       teacherScoringCompleted.value = message.data.teacher_scoring_completed ?? false
@@ -726,8 +765,10 @@ function handleMessage(message) {
       
     case 'results_reveal':
       // 结果揭晓
+      console.log('收到results_reveal消息:', message.data)
       if (message.data.results) {
         contestResults.value = message.data.results
+        console.log('更新比赛结果:', contestResults.value)
       }
       break
       
@@ -793,9 +834,236 @@ function handleMessage(message) {
   color: rgba(255, 255, 255, 0.5) !important;
 }
 
-.class-selector :deep(.el-select__caret),
-.class-selector :deep(.el-select__suffix) {
-  color: rgba(255, 255, 255, 0.7) !important;
+
+/* UI UX Pro Max Results Styles */
+.results-state-max {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.8s ease-out;
+}
+
+.results-header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.winner-label {
+  font-size: 24px;
+  color: #ffd700;
+  margin-bottom: 10px;
+  text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+  letter-spacing: 4px;
+}
+
+.winner-name-max {
+  font-size: 72px;
+  font-weight: 900;
+  background: linear-gradient(to right, #ffffff, #e0e0e0);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.3));
+  animation: scaleIn 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.winner-name-max.pro {
+  background: linear-gradient(to right, #409eff, #79bbff);
+  background-clip: text;
+  -webkit-background-clip: text;
+  filter: drop-shadow(0 0 30px rgba(64, 158, 255, 0.6));
+}
+
+.winner-name-max.con {
+  background: linear-gradient(to right, #f56c6c, #f89898);
+  background-clip: text;
+  -webkit-background-clip: text;
+  filter: drop-shadow(0 0 30px rgba(245, 108, 108, 0.6));
+}
+
+.results-content-max {
+  display: flex;
+  gap: 40px;
+  width: 90%;
+  max-width: 1400px;
+  height: 60vh;
+}
+
+.result-card {
+  flex: 1;
+  border-radius: 24px;
+  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.result-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.panel-title {
+  font-size: 28px;
+  margin-bottom: 30px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.9);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 15px;
+}
+
+/* Vote Panel Styles */
+.vote-swing-container {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  flex: 1;
+  gap: 30px;
+}
+
+.team-vote-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.team-vote-row.pro { border-left: 6px solid #409eff; }
+.team-vote-row.con { border-left: 6px solid #f56c6c; }
+
+.team-name-large {
+  font-size: 32px;
+  font-weight: bold;
+}
+
+.vs-divider-mini {
+  text-align: center;
+  font-size: 24px;
+  color: rgba(255,255,255,0.3);
+  font-style: italic;
+  font-weight: 900;
+}
+
+.vote-change-box {
+  font-size: 28px;
+  font-weight: bold;
+  padding: 10px 20px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.vote-change-box.positive { color: #67c23a; background: rgba(103, 194, 58, 0.2); }
+.vote-change-box.negative { color: #f56c6c; background: rgba(245, 108, 108, 0.2); }
+
+/* Rank Panel Styles */
+.rank-list-max {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.rank-row {
+  display: flex;
+  align-items: center;
+  padding: 15px 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 16px;
+  transition: all 0.3s ease;
+  animation: slideInRight 0.6s ease-out backwards;
+  animation-delay: var(--delay);
+}
+
+.rank-row:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateX(10px);
+}
+
+.rank-num {
+  font-size: 24px;
+  font-weight: 900;
+  width: 40px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.rank-1 .rank-num { color: #ffd700; text-shadow: 0 0 10px rgba(255, 215, 0, 0.5); font-size: 32px; }
+.rank-2 .rank-num { color: #c0c0c0; text-shadow: 0 0 10px rgba(192, 192, 192, 0.5); font-size: 28px; }
+.rank-3 .rank-num { color: #cd7f32; text-shadow: 0 0 10px rgba(205, 127, 50, 0.5); font-size: 26px; }
+
+.debater-avatar-placeholder {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 24px;
+  font-weight: bold;
+  margin-right: 20px;
+  border: 2px solid rgba(255,255,255,0.2);
+}
+
+.rank-1 .debater-avatar-placeholder { border-color: #ffd700; box-shadow: 0 0 15px rgba(255, 215, 0, 0.4); }
+
+.debater-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.d-name {
+  font-size: 20px;
+  font-weight: bold;
+}
+
+.d-team-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-top: 4px;
+  width: fit-content;
+}
+
+.d-team-badge.pro { background: rgba(64, 158, 255, 0.3); color: #409eff; }
+.d-team-badge.con { background: rgba(245, 108, 108, 0.3); color: #f56c6c; }
+
+.final-score {
+  font-size: 28px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.final-score .unit {
+  font-size: 14px;
+  color: rgba(255,255,255,0.5);
+  font-weight: normal;
+}
+
+@keyframes scaleIn {
+  0% { transform: scale(0.5); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes slideInRight {
+  0% { transform: translateX(50px); opacity: 0; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fadeIn {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
 }
 
 .no-class {
@@ -1056,7 +1324,7 @@ function handleMessage(message) {
 /* 辩论赛样式 */
 .debate-status-panel {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
   margin-bottom: 40px;
   padding: 24px;
@@ -1424,5 +1692,55 @@ function handleMessage(message) {
   font-size: 20px;
   font-weight: bold;
   color: #67c23a;
+}
+.vote-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 15px;
+  width: 100%;
+}
+.stat-box {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 8px;
+  border-radius: 8px;
+  text-align: center;
+}
+.stat-box.highlight {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.stat-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 4px;
+}
+.stat-val {
+  font-size: 18px;
+  font-weight: bold;
+  color: #fff;
+}
+.stat-val.positive { color: #f56c6c; }
+.stat-val.negative { color: #67c23a; }
+
+.team-topic {
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.8);
+  margin-top: 8px;
+  max-width: 300px;
+  line-height: 1.4;
+  font-weight: normal;
+}
+
+.d-team-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.d-team-name-text {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
 }
 </style>

@@ -34,6 +34,8 @@ class UserResponse(BaseModel):
     class_id: int | None = None
     has_presented: bool = False
     topic: str | None = None
+    team_side: str | None = None
+    debater_position: str | None = None
     
     class Config:
         from_attributes = True

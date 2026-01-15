@@ -14,6 +14,7 @@ from app.models.judge_score import JudgeScore
 from app.schemas.user import UserResponse, UserCreate, UserImport
 from app.schemas.system import StageSetRequest, SystemStateResponse, ScoreProgressResponse
 from app.services.auth import get_password_hash
+from app.services.system_state import update_debate_stage
 from app.websocket import manager
 
 router = APIRouter(prefix="/admin", tags=["管理员"])
@@ -125,6 +126,48 @@ async def create_teacher(data: UserCreate, db: AsyncSession = Depends(get_db)):
         await db.commit()
         
     return user
+
+
+@router.post("/teachers/import")
+async def import_teachers(data: UserImport, db: AsyncSession = Depends(get_db)):
+    """批量导入评委"""
+    created_count = 0
+    errors = []
+    
+    for teacher_data in data.users:
+        try:
+            # 检查用户名是否存在
+            result = await db.execute(select(User).where(User.username == teacher_data.username))
+            if result.scalar_one_or_none():
+                errors.append(f"用户名 {teacher_data.username} 已存在")
+                continue
+            
+            user = User(
+                username=teacher_data.username,
+                password_hash=get_password_hash(teacher_data.password or '123456'),
+                role=UserRole.judge,
+                display_name=teacher_data.display_name,
+                workspace_id=1
+            )
+            db.add(user)
+            await db.flush()  # 获取user.id
+            
+            # 关联到赛场
+            if teacher_data.class_id:
+                tc = TeacherClass(teacher_id=user.id, class_id=teacher_data.class_id)
+                db.add(tc)
+            
+            created_count += 1
+        except Exception as e:
+            errors.append(f"创建 {teacher_data.username} 失败: {str(e)}")
+    
+    await db.commit()
+    
+    return {
+        "created_count": created_count,
+        "errors": errors,
+        "message": f"成功导入 {created_count} 个评委" + (f"，{len(errors)} 个失败" if errors else "")
+    }
 
 
 @router.post("/teachers/add")
@@ -321,6 +364,8 @@ async def create_contest(
     pro_team_name: str = Query(...),
     con_team_name: str = Query(...),
     class_id: int = Query(...),
+    pro_topic: str | None = Query(None),
+    con_topic: str | None = Query(None),
     db: AsyncSession = Depends(get_db)
 ):
     """创建新的辩论比赛"""
@@ -328,7 +373,9 @@ async def create_contest(
         class_id=class_id,
         topic=topic,
         pro_team_name=pro_team_name,
-        con_team_name=con_team_name
+        con_team_name=con_team_name,
+        pro_topic=pro_topic,
+        con_topic=con_topic
     )
     db.add(contest)
     await db.commit()
@@ -354,6 +401,21 @@ async def get_current_contest(
     return {"contest": contest}
 
 
+@router.get("/debate/contest/{contest_id}")
+async def get_contest_by_id(
+    contest_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """根据比赛ID获取比赛信息"""
+    result = await db.execute(
+        select(Contest).where(Contest.id == contest_id)
+    )
+    contest = result.scalar_one_or_none()
+    if not contest:
+        raise HTTPException(status_code=404, detail="比赛不存在")
+    return contest
+
+
 @router.post("/debate/stage")
 async def set_debate_stage(
     stage: str = Query(...),
@@ -362,25 +424,17 @@ async def set_debate_stage(
     db: AsyncSession = Depends(get_db)
 ):
     """设置辩论赛阶段"""
-    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
-    settings = result.scalar_one_or_none()
+    try:
+        # 尝试将字符串转换为枚举，确保有效性
+        stage_enum = SystemStage(stage)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"无效的阶段: {stage}")
+
+    # 使用服务层函数统一处理状态更新
+    success = await update_debate_stage(db, class_id, stage_enum, contest_id)
     
-    if not settings:
-        settings = SystemSettings(class_id=class_id)
-        db.add(settings)
-    
-    settings.current_stage = stage
-    settings.update_time = int(time.time() * 1000)
-    
-    await db.commit()
-    
-    await manager.broadcast_to_class(class_id, {
-        "type": "STATE_UPDATE",
-        "data": {
-            "current_stage": stage,
-            "update_time": settings.update_time
-        }
-    })
+    if not success:
+        raise HTTPException(status_code=500, detail="更新状态失败")
     
     return {"message": "Stage updated"}
 
@@ -404,6 +458,23 @@ async def get_debate_progress(
         
     contest_id = contest.id
     
+    # 获取系统设置以确定投票是否开启
+    settings_result = await db.execute(
+        select(SystemSettings).where(SystemSettings.class_id == class_id)
+    )
+    settings = settings_result.scalar_one_or_none()
+    
+    # 使用 SystemSettings 中的投票开启标志
+    pre_voting_enabled = False
+    post_voting_enabled = False
+    judge_scoring_enabled = False
+    
+    if settings:
+        pre_voting_enabled = settings.pre_voting_enabled or False
+        post_voting_enabled = settings.post_voting_enabled or False
+        judge_scoring_enabled = settings.judge_scoring_enabled or False
+    
+    # 计算观众总数（排除辩手和评委）
     audience_count_res = await db.execute(
         select(func.count(User.id))
         .where(User.class_id == class_id)
@@ -414,14 +485,14 @@ async def get_debate_progress(
     pre_votes_res = await db.execute(
         select(func.count(VoteRecord.id))
         .where(VoteRecord.contest_id == contest_id)
-        .where(VoteRecord.vote_type == "pre_contest")
+        .where(VoteRecord.vote_phase == "pre_debate")
     )
     pre_submitted = pre_votes_res.scalar() or 0
     
     post_votes_res = await db.execute(
         select(func.count(VoteRecord.id))
         .where(VoteRecord.contest_id == contest_id)
-        .where(VoteRecord.vote_type == "post_contest")
+        .where(VoteRecord.vote_phase == "post_debate")
     )
     post_submitted = post_votes_res.scalar() or 0
     
@@ -431,17 +502,33 @@ async def get_debate_progress(
     )
     total_judges = judge_count_res.scalar() or 0
     
-    judges_submitted_res = await db.execute(
-        select(func.count(func.distinct(JudgeScore.judge_id)))
-        .where(JudgeScore.contest_id == contest_id)
+    # 修改：计算评委评分进度（需要所有辩手都被评分）
+    # 1. 获取辩手总数
+    debaters_count_res = await db.execute(
+        select(func.count(User.id))
+        .where(User.class_id == class_id)
+        .where(User.team_side.isnot(None))
+        .where(User.debater_position.isnot(None))
     )
-    items_submitted = judges_submitted_res.scalar() or 0
+    total_debaters = debaters_count_res.scalar() or 0
+    
+    # 2. 统计每个评委的已评分数量
+    completed_judges_count = 0
+    if total_debaters > 0:
+        judge_scores_res = await db.execute(
+            select(JudgeScore.judge_id, func.count(JudgeScore.id))
+            .where(JudgeScore.contest_id == contest_id)
+            .group_by(JudgeScore.judge_id)
+        )
+        for _, count in judge_scores_res.all():
+            if count >= total_debaters:
+                completed_judges_count += 1
     
     return {
         "voting_enabled": {
-            "pre_voting": True,
-            "post_voting": True,
-            "judge_scoring": True
+            "pre_voting": pre_voting_enabled,
+            "post_voting": post_voting_enabled,
+            "judge_scoring": judge_scoring_enabled
         },
         "pre_voting_progress": {
             "total": total_audience,
@@ -455,8 +542,8 @@ async def get_debate_progress(
         },
         "judge_scoring_progress": {
             "total": total_judges,
-            "submitted": items_submitted,
-            "percentage": int(items_submitted / total_judges * 100) if total_judges > 0 else 0
+            "submitted": completed_judges_count,
+            "percentage": int(completed_judges_count / total_judges * 100) if total_judges > 0 else 0
         }
     }
 
@@ -467,21 +554,82 @@ async def reveal_debate_results(
     db: AsyncSession = Depends(get_db)
 ):
     """揭晓比赛结果"""
-    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
-    settings = result.scalar_one_or_none()
-    
-    if settings:
-        settings.current_stage = "RESULTS_REVEALED"
-        settings.update_time = int(time.time() * 1000)
-        await db.commit()
+    try:
+        # 获取当前比赛
+        contest_result = await db.execute(
+            select(Contest)
+            .where(Contest.class_id == class_id)
+            .order_by(Contest.created_at.desc())
+            .limit(1)
+        )
+        contest = contest_result.scalar_one_or_none()
         
-        await manager.broadcast_to_class(class_id, {
-            "type": "STATE_UPDATE",
-            "data": {
-                "current_stage": "RESULTS_REVEALED"
-            }
-        })
-    return {"message": "Results revealed"}
+        if not contest:
+            raise HTTPException(status_code=404, detail="未找到比赛")
+        
+        # 更新系统状态
+        result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+        settings = result.scalar_one_or_none()
+        
+        if settings:
+            settings.current_stage = "RESULTS_REVEALED"
+            settings.update_time = int(time.time() * 1000)
+            await db.commit()
+            
+            # 广播状态更新
+            await manager.broadcast_to_class(class_id, {
+                "type": "STATE_UPDATE",
+                "data": {
+                    "current_stage": "RESULTS_REVEALED"
+                }
+            })
+            
+            # 尝试获取和广播比赛结果
+            try:
+                from app.services.calculation import get_calculation_service
+                calc_service = get_calculation_service(db)
+                contest_result_data = await calc_service.calculate_contest_result(contest.id)
+                
+                # 准备结果数据
+                results_data = {
+                    "contest_id": contest_result_data.contest_id,
+                    "winning_team": contest_result_data.winning_team,
+                    "pro_team_swing": contest_result_data.pro_team_swing,
+                    "con_team_swing": contest_result_data.con_team_swing,
+                    "total_votes_cast": contest_result_data.total_votes_cast,
+                    "debater_rankings": [
+                        {
+                            "debater_id": ranking.debater_id,
+                            "debater_name": ranking.debater_name,
+                            "team_side": ranking.team_side,
+                            "final_score": ranking.final_score,
+                            "rank": ranking.rank
+                        }
+                        for ranking in contest_result_data.debater_rankings
+                    ]
+                }
+                
+                # 广播结果揭晓数据
+                await manager.broadcast_to_class(class_id, {
+                    "type": "results_reveal",
+                    "data": {
+                        "results": results_data
+                    }
+                })
+            except Exception as e:
+                # 如果计算结果失败，记录错误但不阻止状态更新
+                print(f"计算比赛结果失败: {str(e)}")
+                import traceback
+                traceback.print_exc()
+            
+        return {"message": "Results revealed"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"揭晓结果失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"揭晓结果失败: {str(e)}")
 
 
 @router.put("/users/{user_id}/debate-role")
@@ -496,11 +644,128 @@ async def update_user_debate_role(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    if team_side:
-        user.team_side = team_side
-        
-    if debater_position:
-        user.debater_position = debater_position
+    # 允许设置为None以移除角色
+    user.team_side = team_side
+    user.debater_position = debater_position
+    
+    # 严格角色区分：
+    # 如果分配了位置，强制角色为 'student' (辩手)
+    if team_side and debater_position:
+        user.role = UserRole.student
+    # 如果移除了位置，且当前角色是 student，可以考虑转为 audience
+    # 但为了安全，我们只在分配时强制转为 student
         
     await db.commit()
     return {"message": "Role updated"}
+
+
+@router.post("/debate/reset")
+async def reset_debate_system(
+    class_id: int = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """重置辩论系统到初始状态"""
+    # 1. 获取该班级的所有比赛
+    contests_result = await db.execute(
+        select(Contest).where(Contest.class_id == class_id)
+    )
+    contests = contests_result.scalars().all()
+    contest_ids = [c.id for c in contests]
+    
+    # 2. 删除所有投票记录
+    if contest_ids:
+        await db.execute(
+            delete(VoteRecord).where(VoteRecord.contest_id.in_(contest_ids))
+        )
+        
+        # 3. 删除所有评委评分记录
+        await db.execute(
+            delete(JudgeScore).where(JudgeScore.contest_id.in_(contest_ids))
+        )
+        
+        # 4. 删除所有比赛
+        await db.execute(
+            delete(Contest).where(Contest.class_id == class_id)
+        )
+    
+    # 5. 重置系统设置
+    settings_result = await db.execute(
+        select(SystemSettings).where(SystemSettings.class_id == class_id)
+    )
+    settings = settings_result.scalar_one_or_none()
+    
+    if settings:
+        settings.current_stage = SystemStage.IDLE
+        settings.contest_id = None
+        settings.pre_voting_enabled = False
+        settings.post_voting_enabled = False
+        settings.judge_scoring_enabled = False
+        settings.results_revealed = False
+        settings.update_time = int(time.time() * 1000)
+    else:
+        # 如果不存在设置，创建一个默认的
+        settings = SystemSettings(class_id=class_id)
+        db.add(settings)
+    
+    # 6. 删除所有学生用户（辩手）
+    await db.execute(
+        delete(User)
+        .where(User.class_id == class_id)
+        .where(User.role == UserRole.student)
+    )
+    
+    await db.commit()
+    
+    # 7. 广播系统重置消息
+    await manager.broadcast_to_class(class_id, {
+        "type": "STATE_UPDATE",
+        "data": {
+            "current_stage": "IDLE",
+            "update_time": settings.update_time
+        }
+    })
+    
+    return {"message": "系统已重置到初始状态"}
+
+
+@router.get("/debate/results/{contest_id}")
+async def get_debate_results(
+    contest_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """获取辩论结果（计算但不揭晓）"""
+    from app.services.calculation import get_calculation_service
+    
+    calc_service = get_calculation_service(db)
+    contest_result = await calc_service.calculate_contest_result(contest_id)
+    
+    return {
+        "contest_id": contest_result.contest_id,
+        "winning_team": contest_result.winning_team,
+        "pro_team_swing": contest_result.pro_team_swing,
+        "con_team_swing": contest_result.con_team_swing,
+        "total_votes_cast": contest_result.total_votes_cast,
+        "debater_rankings": [
+            {
+                "debater_id": ranking.debater_id,
+                "debater_name": ranking.debater_name,
+                "team_side": ranking.team_side,
+                "final_score": ranking.final_score,
+                "logical_reasoning_avg": ranking.logical_reasoning_avg,
+                "debate_skills_avg": ranking.debate_skills_avg,
+                "rank": ranking.rank
+            }
+            for ranking in contest_result.debater_rankings
+        ],
+        "vote_analysis": [
+            {
+                "team_side": analysis.team_side,
+                "team_name": analysis.team_name,
+                "pre_debate_votes": analysis.pre_debate_votes,
+                "post_debate_votes": analysis.post_debate_votes,
+                "swing_vote": analysis.swing_vote,
+                "vote_percentage_change": analysis.vote_percentage_change
+            }
+            for analysis in contest_result.vote_analysis
+        ]
+    }

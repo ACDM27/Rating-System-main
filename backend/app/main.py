@@ -6,6 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import auth_router, admin_router, vote_router, judge_score_router
+from app.routers.vote_records import router as vote_records_router
 from app.websocket import manager
 
 
@@ -54,6 +55,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(vote_router)
 app.include_router(judge_score_router)
+app.include_router(vote_records_router)
 
 
 @app.get("/")

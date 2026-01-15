@@ -31,22 +31,29 @@ export function getDebateResults(contestId) {
 }
 
 // 创建比赛
-export function createContest(topic, proTeamName, conTeamName, classId) {
+export function createContest(topic, proTeamName, conTeamName, classId, proTopic, conTopic) {
   return request.post('/admin/debate/contest', null, {
     params: {
       topic,
       pro_team_name: proTeamName,
       con_team_name: conTeamName,
-      class_id: classId
+      class_id: classId,
+      pro_topic: proTopic,
+      con_topic: conTopic
     }
   })
 }
 
-// 获取当前比赛
+// 获取当前比赛（通过 class_id）
 export function getCurrentContest(classId) {
   return request.get('/admin/debate/contest', {
     params: { class_id: classId }
   })
+}
+
+// 根据比赛ID获取比赛信息
+export function getContestById(contestId) {
+  return request.get(`/admin/debate/contest/${contestId}`)
 }
 
 // 更新用户辩论角色
@@ -56,4 +63,11 @@ export function updateUserDebateRole(userId, teamSide = null, debaterPosition = 
   if (debaterPosition !== null) params.debater_position = debaterPosition
 
   return request.put(`/admin/users/${userId}/debate-role`, null, { params })
+}
+
+// 重置辩论系统
+export function resetDebateSystem(classId) {
+  return request.post('/admin/debate/reset', null, {
+    params: { class_id: classId }
+  })
 }

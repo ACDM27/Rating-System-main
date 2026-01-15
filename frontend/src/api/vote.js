@@ -14,3 +14,8 @@ export function getMyVotes(contestId) {
 export function getVoteStatistics(contestId) {
   return request.get(`/vote/stats/${contestId}`)
 }
+
+// 获取公开的辩论结果（观众可见）
+export function getPublicResults(contestId) {
+  return request.get(`/vote/results/${contestId}`)
+}

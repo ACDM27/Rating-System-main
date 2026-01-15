@@ -30,7 +30,13 @@
       <div v-if="!currentContest" class="contest-setup">
         <el-form :model="contestForm" label-width="120px" style="max-width: 600px">
           <el-form-item label="辩题">
-            <el-input v-model="contestForm.topic" placeholder="请输入辩论主题" />
+            <el-input v-model="contestForm.topic" placeholder="请输入辩论总主题" />
+          </el-form-item>
+          <el-form-item label="正方辩题">
+            <el-input v-model="contestForm.proTopic" placeholder="请输入正方具体辩题（选填，默认同总主题）" />
+          </el-form-item>
+          <el-form-item label="反方辩题">
+            <el-input v-model="contestForm.conTopic" placeholder="请输入反方具体辩题（选填，默认同总主题）" />
           </el-form-item>
           <el-form-item label="正方队名">
             <el-input v-model="contestForm.proTeamName" placeholder="请输入正方队伍名称" />
@@ -50,6 +56,14 @@
           <div class="contest-item">
             <span class="label">辩题：</span>
             <span class="value">{{ currentContest.topic }}</span>
+          </div>
+          <div class="contest-item" v-if="currentContest.pro_topic">
+            <span class="label">正方辩题：</span>
+            <span class="value">{{ currentContest.pro_topic }}</span>
+          </div>
+          <div class="contest-item" v-if="currentContest.con_topic">
+            <span class="label">反方辩题：</span>
+            <span class="value">{{ currentContest.con_topic }}</span>
           </div>
           <div class="contest-item">
             <span class="label">正方：</span>
@@ -146,7 +160,6 @@
         <el-button 
           type="primary" 
           size="large"
-          :disabled="systemStore.currentStage !== 'RESULTS_SEALED'"
           @click="handleRevealResults"
         >
           揭晓结果
@@ -202,7 +215,7 @@
       <div class="participant-actions">
         <el-button @click="router.push(`/admin/students?class_id=${authStore.currentClassId}`)">观众管理</el-button>
         <el-button @click="router.push(`/admin/teachers?class_id=${authStore.currentClassId}`)">评委管理</el-button>
-        <el-button @click="showDebaterDialog = true" :disabled="!currentContest">辞手分配</el-button>
+        <el-button @click="showDebaterDialog = true" :disabled="!currentContest">辩手分配</el-button>
       </div>
     </div>
     
@@ -216,49 +229,158 @@
       </div>
     </div>
     
-    <!-- 辞手分配对话框 -->
-    <el-dialog v-model="showDebaterDialog" title="辞手分配" width="800px">
-      <div class="debater-assignment">
-        <div class="team-section">
-          <h4>正方队伍 ({{ currentContest?.pro_team_name }})</h4>
-          <div class="debater-list">
-            <div v-for="position in debaterPositions" :key="`pro-${position.key}`" class="debater-item">
-              <span class="position-label">{{ position.label }}：</span>
-              <el-select 
-                v-model="debaterAssignments.pro[position.key]" 
-                placeholder="选择辞手"
-                style="width: 200px"
-              >
-                <el-option 
-                  v-for="user in availableUsers" 
-                  :key="user.id" 
-                  :label="user.display_name" 
-                  :value="user.id"
-                />
-              </el-select>
+    <!-- 投票和评分记录 -->
+    <div class="card" v-if="currentContest">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="margin: 0;">投票和评分记录</h3>
+        <el-button @click="loadRecords" :loading="loadingRecords" size="small">
+          刷新数据
+        </el-button>
+      </div>
+      
+      <el-tabs v-model="activeRecordTab">
+        <!-- 观众投票记录 -->
+        <el-tab-pane label="观众投票记录" name="votes">
+          <div style="margin-bottom: 16px; display: flex; gap: 20px; padding: 12px; background: #f5f5f5; border-radius: 8px;">
+            <div>
+              <span style="color: #666;">赛前投票:</span>
+              <span style="color: #333; font-weight: bold; margin-left: 8px;">
+                {{ voteRecords.filter(v => v.vote_phase === 'pre_debate').length }} 票
+              </span>
+            </div>
+            <div>
+              <span style="color: #666;">赛后投票:</span>
+              <span style="color: #333; font-weight: bold; margin-left: 8px;">
+                {{ voteRecords.filter(v => v.vote_phase === 'post_debate').length }} 票
+              </span>
+            </div>
+            <div>
+              <span style="color: #666;">总计:</span>
+              <span style="color: #409eff; font-weight: bold; margin-left: 8px;">
+                {{ voteRecords.length }} 票
+              </span>
             </div>
           </div>
-        </div>
+          
+          <el-table :data="voteRecords" stripe style="width: 100%" max-height="400" v-loading="loadingRecords">
+            <el-table-column type="index" label="#" width="50" />
+            <el-table-column prop="voter_name" label="投票人" width="120" />
+            <el-table-column label="投票阶段" width="120">
+              <template #default="scope">
+                <el-tag :type="scope.row.vote_phase === 'pre_debate' ? 'warning' : 'success'" size="small">
+                  {{ scope.row.vote_phase === 'pre_debate' ? '赛前投票' : '赛后投票' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="支持队伍" width="120">
+              <template #default="scope">
+                <el-tag :type="scope.row.team_side === 'pro' ? 'danger' : 'primary'" size="small">
+                  {{ scope.row.team_side === 'pro' ? '正方' : '反方' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="投票时间" width="180">
+              <template #default="scope">
+                {{ formatDateTime(scope.row.created_at) }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
         
-        <div class="team-section">
-          <h4>反方队伍 ({{ currentContest?.con_team_name }})</h4>
-          <div class="debater-list">
-            <div v-for="position in debaterPositions" :key="`con-${position.key}`" class="debater-item">
-              <span class="position-label">{{ position.label }}：</span>
-              <el-select 
-                v-model="debaterAssignments.con[position.key]" 
-                placeholder="选择辞手"
-                style="width: 200px"
-              >
-                <el-option 
-                  v-for="user in availableUsers" 
-                  :key="user.id" 
-                  :label="user.display_name" 
-                  :value="user.id"
-                />
-              </el-select>
+        <!-- 评委评分记录 -->
+        <el-tab-pane label="评委评分记录" name="scores">
+          <div style="margin-bottom: 16px; display: flex; gap: 20px; padding: 12px; background: #f5f5f5; border-radius: 8px;">
+            <div>
+              <span style="color: #666;">已评分评委:</span>
+              <span style="color: #333; font-weight: bold; margin-left: 8px;">
+                {{ uniqueJudgesCount }} 人
+              </span>
+            </div>
+            <div>
+              <span style="color: #666;">评分记录:</span>
+              <span style="color: #409eff; font-weight: bold; margin-left: 8px;">
+                {{ judgeScores.length }} 条
+              </span>
             </div>
           </div>
+          
+          <el-table :data="judgeScores" stripe style="width: 100%" max-height="400" v-loading="loadingRecords">
+            <el-table-column type="index" label="#" width="50" />
+            <el-table-column prop="judge_name" label="评委" width="120" />
+            <el-table-column prop="debater_name" label="辩手" width="120" />
+            <el-table-column label="队伍" width="100">
+              <template #default="scope">
+                <el-tag :type="scope.row.team_side === 'pro' ? 'danger' : 'primary'" size="small">
+                  {{ scope.row.team_side === 'pro' ? '正方' : '反方' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="logical_reasoning" label="逻辑推理" width="100" align="center">
+              <template #default="scope">
+                <span style="color: #67c23a; font-weight: bold;">{{ scope.row.logical_reasoning }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="debate_skills" label="辩论技巧" width="100" align="center">
+              <template #default="scope">
+                <span style="color: #67c23a; font-weight: bold;">{{ scope.row.debate_skills }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="总分" width="100" align="center">
+              <template #default="scope">
+                <span style="color: #409eff; font-weight: bold; font-size: 16px;">
+                  {{ scope.row.logical_reasoning + scope.row.debate_skills }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="评分时间" width="180">
+              <template #default="scope">
+                {{ formatDateTime(scope.row.created_at) }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
+    </div>
+    
+    <!-- 辩手分配对话框 -->
+    <el-dialog v-model="showDebaterDialog" title="辩手分配" width="900px">
+      <div class="assignment-container">
+        <!-- 正方队伍 -->
+        <div class="team-section">
+          <h3 class="section-title">正方队伍 ({{ currentContest?.pro_team_name }})</h3>
+          <el-form label-width="60px">
+            <el-form-item label="一辩：">
+              <el-input v-model="debaterAssignments.pro.first" placeholder="请输入辩手姓名" />
+            </el-form-item>
+            <el-form-item label="二辩：">
+              <el-input v-model="debaterAssignments.pro.second" placeholder="请输入辩手姓名" />
+            </el-form-item>
+            <el-form-item label="三辩：">
+              <el-input v-model="debaterAssignments.pro.third" placeholder="请输入辩手姓名" />
+            </el-form-item>
+            <el-form-item label="四辩：">
+              <el-input v-model="debaterAssignments.pro.fourth" placeholder="请输入辩手姓名" />
+            </el-form-item>
+          </el-form>
+        </div>
+
+        <!-- 反方队伍 -->
+        <div class="team-section">
+          <h3 class="section-title">反方队伍 ({{ currentContest?.con_team_name }})</h3>
+          <el-form label-width="60px">
+            <el-form-item label="一辩：">
+              <el-input v-model="debaterAssignments.con.first" placeholder="请输入辩手姓名" />
+            </el-form-item>
+            <el-form-item label="二辩：">
+              <el-input v-model="debaterAssignments.con.second" placeholder="请输入辩手姓名" />
+            </el-form-item>
+            <el-form-item label="三辩：">
+              <el-input v-model="debaterAssignments.con.third" placeholder="请输入辩手姓名" />
+            </el-form-item>
+            <el-form-item label="四辩：">
+              <el-input v-model="debaterAssignments.con.fourth" placeholder="请输入辩手姓名" />
+            </el-form-item>
+          </el-form>
         </div>
       </div>
       
@@ -284,11 +406,57 @@ import {
   revealDebateResults,
   createContest,
   getCurrentContest,
-  updateUserDebateRole
+  updateUserDebateRole,
+  resetDebateSystem
 } from '../../api/debate'
-import { getTeams } from '../../api/admin'
+import { getTeams, createStudent } from '../../api/admin'
+import api from '../../api/index'
 
 const router = useRouter()
+
+// 加载投票和评分记录
+async function loadRecords() {
+  if (!currentContest.value) {
+    console.warn('没有当前比赛，无法加载记录')
+    return
+  }
+  
+  loadingRecords.value = true
+  try {
+    const contestId = currentContest.value.id
+    console.log('正在加载比赛记录，contest_id:', contestId)
+    
+    // 获取投票记录
+    try {
+      const votes = await api.get('/api/vote/records', {
+        params: { contest_id: contestId }
+      })
+      voteRecords.value = votes || []
+      console.log('投票记录加载成功:', voteRecords.value.length, '条')
+    } catch (error) {
+      console.error('获取投票记录失败:', error)
+      voteRecords.value = []
+    }
+    
+    // 获取评分记录
+    try {
+      const scores = await api.get('/api/judge/scores', {
+        params: { contest_id: contestId }
+      })
+      judgeScores.value = scores || []
+      console.log('评分记录加载成功:', judgeScores.value.length, '条')
+    } catch (error) {
+      console.error('获取评分记录失败:', error)
+      judgeScores.value = []
+    }
+    
+  } catch (error) {
+    console.error('加载记录失败:', error)
+    ElMessage.error('加载记录失败: ' + (error.detail || error.message || '未知错误'))
+  } finally {
+    loadingRecords.value = false
+  }
+}
 const authStore = useAuthStore()
 const systemStore = useSystemStore()
 
@@ -302,7 +470,9 @@ const creatingContest = ref(false)
 const contestForm = ref({
   topic: '',
   proTeamName: '正方',
-  conTeamName: '反方'
+  conTeamName: '反方',
+  proTopic: '',
+  conTopic: ''
 })
 
 const debaterPositions = [
@@ -314,20 +484,31 @@ const debaterPositions = [
 
 const debaterAssignments = ref({
   pro: {
-    first_speaker: null,
-    second_speaker: null,
-    third_speaker: null,
-    fourth_speaker: null
+    first: '',
+    second: '',
+    third: '',
+    fourth: ''
   },
   con: {
-    first_speaker: null,
-    second_speaker: null,
-    third_speaker: null,
-    fourth_speaker: null
+    first: '',
+    second: '',
+    third: '',
+    fourth: ''
   }
 })
 
 const availableUsers = ref([])
+
+// 投票和评分记录相关状态
+const activeRecordTab = ref('votes')
+const voteRecords = ref([])
+const judgeScores = ref([])
+const loadingRecords = ref(false)
+
+const uniqueJudgesCount = computed(() => {
+  const judgeIds = new Set(judgeScores.value.map(s => s.judge_id))
+  return judgeIds.size
+})
 
 let progressInterval = null
 
@@ -353,6 +534,15 @@ watch(() => authStore.currentClassId, async (newVal) => {
     await systemStore.fetchState()
   }
 })
+
+// 监听比赛变化，自动加载记录
+watch(() => currentContest.value, async (newContest) => {
+  if (newContest) {
+    console.log('检测到比赛变化，自动加载记录')
+    await loadRecords()
+  }
+}, { deep: true })
+
 
 async function handleClassChange(classId) {
   const cls = authStore.availableClasses.find(c => c.id === classId)
@@ -395,7 +585,9 @@ async function handleCreateContest() {
       contestForm.value.topic,
       contestForm.value.proTeamName,
       contestForm.value.conTeamName,
-      authStore.currentClassId
+      authStore.currentClassId,
+      contestForm.value.proTopic,
+      contestForm.value.conTopic
     )
     await loadCurrentContest()
     ElMessage.success('比赛创建成功')
@@ -419,7 +611,7 @@ async function setDebateStage(stage) {
 async function handleRevealResults() {
   try {
     await ElMessageBox.confirm(
-      '确定要揭晓辩论结果吗？结果一旦揭晓将无法撤回。',
+      '确定要揭晓辩论结果吗？结果将实时显示在大屏上。',
       '揭晓结果',
       {
         confirmButtonText: '确定',
@@ -453,24 +645,82 @@ function startProgressPolling() {
 async function handleSaveDebaterAssignments() {
   savingAssignments.value = true
   try {
-    // 保存正方辞手分配
-    for (const [position, userId] of Object.entries(debaterAssignments.value.pro)) {
-      if (userId) {
-        await updateUserDebateRole(userId, 'pro', position)
-      }
+    const positionMap = {
+      first: 'first_debater',
+      second: 'second_debater',
+      third: 'third_debater',
+      fourth: 'fourth_debater'
     }
     
-    // 保存反方辞手分配
-    for (const [position, userId] of Object.entries(debaterAssignments.value.con)) {
-      if (userId) {
-        await updateUserDebateRole(userId, 'con', position)
-      }
+    // 获取所有现有用户
+    const allUsers = await getTeams(authStore.currentClassId)
+    
+    // 1. 先清除所有现有的辩手分配，防止重复和残留
+    const existingDebaters = allUsers.filter(u => u.team_side || u.debater_position)
+    if (existingDebaters.length > 0) {
+      await Promise.all(existingDebaters.map(u => 
+        updateUserDebateRole(u.id, null, null)
+      ))
+      // 重新获取用户列表以确保状态最新（或者在后续查找时注意）
+      // 由于我们只用了 id 和 name，前面的 allUsers 仍然可用，
+      // 但如果要复用对象，可能需要注意。这里find是按name找，所以没问题。
     }
     
-    ElMessage.success('辞手分配已保存')
+    // 处理正方辩手
+    for (const [key, name] of Object.entries(debaterAssignments.value.pro)) {
+      if (!name || !name.trim()) continue
+      
+      const trimmedName = name.trim()
+      const position = positionMap[key]
+      
+      // 查找是否已存在该用户
+      let debater = allUsers.find(u => u.username === trimmedName || u.display_name === trimmedName)
+      
+      if (!debater) {
+        // 用户不存在，创建新辩手
+        debater = await createStudent({
+          username: trimmedName,
+          display_name: trimmedName,
+          password: '123456',
+          role: 'student',
+          class_id: authStore.currentClassId
+        })
+      }
+      
+      // 分配辩手角色
+      await updateUserDebateRole(debater.id, 'pro', position)
+    }
+    
+    // 处理反方辩手
+    for (const [key, name] of Object.entries(debaterAssignments.value.con)) {
+      if (!name || !name.trim()) continue
+      
+      const trimmedName = name.trim()
+      const position = positionMap[key]
+      
+      // 查找是否已存在该用户
+      let debater = allUsers.find(u => u.username === trimmedName || u.display_name === trimmedName)
+      
+      if (!debater) {
+        // 用户不存在，创建新辩手
+        debater = await createStudent({
+          username: trimmedName,
+          display_name: trimmedName,
+          password: '123456',
+          role: 'student',
+          class_id: authStore.currentClassId
+        })
+      }
+      
+      // 分配辩手角色
+      await updateUserDebateRole(debater.id, 'con', position)
+    }
+    
+    ElMessage.success('辩手分配已保存')
     showDebaterDialog.value = false
   } catch (error) {
-    ElMessage.error(error.detail || '保存分配失败')
+    console.error('保存辩手分配失败:', error)
+    ElMessage.error(error.detail || error.message || '保存分配失败')
   } finally {
     savingAssignments.value = false
   }
@@ -503,8 +753,11 @@ function getStageType(stage) {
 }
 
 function openScreen() {
-  const workspaceId = authStore.user?.workspace_id || 1
-  window.open(`/screen?class_id=${authStore.currentClassId}&workspace_id=${workspaceId}`, '_blank')
+  if (!currentContest.value) {
+    ElMessage.warning('请先创建比赛')
+    return
+  }
+  window.open(`/screen?contest_id=${currentContest.value.id}`, '_blank')
 }
 
 function viewResults() {
@@ -516,7 +769,7 @@ function viewResults() {
 async function handleResetSystem() {
   try {
     await ElMessageBox.confirm(
-      '此操作将清空该班级所有投票记录和评分记录，并重置系统状态。是否继续？',
+      '此操作将清空该班级所有投票记录和评分记录，删除所有比赛，并重置系统状态。是否继续?',
       '重置系统',
       {
         confirmButtonText: '确定',
@@ -524,13 +777,38 @@ async function handleResetSystem() {
         type: 'warning'
       }
     )
-    // 这里可以调用重置API
-    ElMessage.success('系统已重置')
+    
+    // 调用重置API
+    await resetDebateSystem(authStore.currentClassId)
+    
+    // 重置本地状态
+    currentContest.value = null
+    debateProgress.value = {}
+    
+    // 重新获取系统状态
+    await systemStore.fetchState()
+    
+    ElMessage.success('系统已重置到初始状态')
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('重置失败')
+      ElMessage.error(error.detail || '重置失败')
     }
   }
+}
+
+
+
+function formatDateTime(dateString) {
+  if (!dateString) return '-'
+  const date = new Date(dateString)
+  return date.toLocaleString('zh-CN', { 
+    year: 'numeric', 
+    month: '2-digit', 
+    day: '2-digit',
+    hour: '2-digit', 
+    minute: '2-digit',
+    second: '2-digit'
+  })
 }
 
 function formatDate(dateString) {
@@ -725,5 +1003,43 @@ h3 {
   margin: 0;
   font-size: 24px;
   color: #303133;
+}
+
+.assignment-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 40px;
+}
+
+.team-section {
+  border: 2px solid #e4e7ed;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.section-title {
+  margin: 0 0 20px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #e4e7ed;
+}
+
+.team-section:first-child .section-title {
+  color: #f5576c;
+  border-bottom-color: rgba(245, 87, 108, 0.3);
+}
+
+.team-section:last-child .section-title {
+  color: #00f2fe;
+  border-bottom-color: rgba(0, 242, 254, 0.3);
+}
+
+@media (max-width: 1024px) {
+  .assignment-container {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
 }
 </style>

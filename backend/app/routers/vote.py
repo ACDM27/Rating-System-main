@@ -9,6 +9,7 @@ from app.models.vote_record import VoteRecord
 from app.models.system_settings import SystemSettings, SystemStage
 from app.schemas.vote import VoteSubmission, VoteResponse, VoteStats
 from app.services.auth import get_current_user
+from app.websocket.manager import manager
 
 router = APIRouter(prefix="/vote", tags=["投票"])
 
@@ -22,7 +23,7 @@ async def submit_vote(
     """提交投票"""
     
     # 验证用户角色
-    if current_user.role not in [UserRole.audience, UserRole.student]:
+    if current_user.role not in [UserRole.audience, UserRole.student, UserRole.admin]:
         raise HTTPException(status_code=403, detail="只有观众可以投票")
     
     # 验证比赛存在
@@ -76,6 +77,21 @@ async def submit_vote(
     await db.commit()
     await db.refresh(vote_record)
     
+    # 统计当前阶段的总投票人数并广播给大屏
+    result = await db.execute(
+        select(func.count(func.distinct(VoteRecord.voter_id)))
+        .where(VoteRecord.contest_id == vote_data.contest_id)
+        .where(VoteRecord.vote_phase == vote_data.vote_phase)
+    )
+    phase_voters = result.scalar() or 0
+    
+    # 通过 WebSocket 广播投票进度更新
+    await manager.broadcast_vote_progress(
+        class_id=contest.class_id,
+        total_votes=phase_voters,
+        contest_id=vote_data.contest_id
+    )
+    
     return VoteResponse(
         id=vote_record.id,
         contest_id=vote_record.contest_id,
@@ -127,7 +143,10 @@ async def get_vote_stats(
     
     # 填充统计数据
     for team_side, vote_phase, count in vote_counts:
-        key = f"{team_side}_{vote_phase}_votes"
+        # vote_phase 格式为 "pre_debate" 或 "post_debate"
+        # 需要提取前缀部分 "pre" 或 "post"
+        phase_prefix = vote_phase.split('_')[0]  # "pre" 或 "post"
+        key = f"{team_side}_{phase_prefix}_votes"
         if key in stats:
             stats[key] = count
     
@@ -237,4 +256,54 @@ async def get_vote_progress(
         'contest_topic': contest.topic,
         'pro_team_name': contest.pro_team_name,
         'con_team_name': contest.con_team_name
+    }
+
+
+@router.get("/results/{contest_id}")
+async def get_public_results(
+    contest_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取辩论赛结果（观众可见，仅在结果揭晓后）"""
+    
+    # 验证比赛存在
+    result = await db.execute(select(Contest).where(Contest.id == contest_id))
+    contest = result.scalar_one_or_none()
+    if not contest:
+        raise HTTPException(status_code=404, detail="比赛不存在")
+    
+    # 检查结果是否已揭晓
+    settings_result = await db.execute(
+        select(SystemSettings).where(SystemSettings.class_id == contest.class_id)
+    )
+    settings = settings_result.scalar_one_or_none()
+    
+    if not settings or settings.current_stage != SystemStage.RESULTS_REVEALED:
+        raise HTTPException(status_code=403, detail="结果尚未揭晓")
+    
+    # 使用统一的计算服务获取结果，确保逻辑一致性
+    from app.services.calculation import get_calculation_service
+    calc_service = get_calculation_service(db)
+    contest_result = await calc_service.calculate_contest_result(contest_id)
+    
+    # 提取正反方分析数据
+    # calculate_contest_result 返回的 vote_analysis 是 [pro_result, con_result]
+    pro_analysis = contest_result.vote_analysis[0]
+    con_analysis = contest_result.vote_analysis[1]
+    
+    return {
+        'contest_id': contest_id,
+        'topic': contest.topic,
+        'pro_team_name': contest.pro_team_name,
+        'con_team_name': contest.con_team_name,
+        'pro_pre_votes': pro_analysis.pre_debate_votes,
+        'con_pre_votes': con_analysis.pre_debate_votes,
+        'pro_post_votes': pro_analysis.post_debate_votes,
+        'con_post_votes': con_analysis.post_debate_votes,
+        'pro_swing_vote': contest_result.pro_team_swing,
+        'con_swing_vote': contest_result.con_team_swing,
+        'pro_growth_rate': pro_analysis.growth_rate,
+        'con_growth_rate': con_analysis.growth_rate,
+        'winner': contest_result.winning_team
     }

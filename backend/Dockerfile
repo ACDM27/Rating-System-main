@@ -1,34 +1,33 @@
-FROM ccr.ccs.tencentyun.com/z5882852/python:3.12-slim
+FROM python:3.12-slim
 
-# 设置工作目录
+# Set working directory
 WORKDIR /app
 
-# 设置环境变量
+# Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# 安装系统依赖
-RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources
-RUN apt-get update && \
-    apt-get install -y gcc default-libmysqlclient-dev libpq-dev pkg-config tzdata && \
-    ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    echo "Asia/Shanghai" > /etc/timezone && \
+# Install system dependencies
+# libpq-dev is required for psycopg2/asyncpg (PostgreSQL)
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends libpq-dev gcc curl && \
     rm -rf /var/lib/apt/lists/*
 
-
-# 复制依赖文件
+# Copy requirements
 COPY requirements.txt .
 
-# 安装 Python 依赖
-RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.cloud.tencent.com/pypi/simple
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
 
-# 复制应用代码
+# Copy application code
 COPY . .
 
-# 暴露端口
+# Expose port
 EXPOSE 8000
 
-# 启动命令：先运行迁移，再启动服务
+# Start command
+# Runs database migration and then starts the application
 CMD ["sh", "-c", "python init_db.py && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

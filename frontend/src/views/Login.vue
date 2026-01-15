@@ -10,6 +10,7 @@
             placeholder="请输入用户名"
             size="large"
             :prefix-icon="User"
+            autocomplete="off"
           />
         </el-form-item>
         
@@ -21,6 +22,7 @@
             size="large"
             :prefix-icon="Lock"
             show-password
+            autocomplete="new-password"
           />
         </el-form-item>
         
@@ -186,7 +188,7 @@ async function handleLogin() {
     }
     
     // 继续正常流程
-    proceedToNextPage(user)
+    await proceedToNextPage(user)
   } catch (error) {
     ElMessage.error(error.detail || '登录失败')
   } finally {
@@ -194,18 +196,21 @@ async function handleLogin() {
   }
 }
 
-function proceedToNextPage(user) {
-  // 根据是否需要选择班级决定跳转
-  if (authStore.needSelectClass) {
-    // 管理员、评委需要选择班级
-    router.push('/class-select')
-  } else if (user.role === 'audience' && authStore.hasSelectedClass) {
-    // 观众自动进入投票页面
-    systemStore.fetchState()
+async function proceedToNextPage(user) {
+  // 观众直接进入投票页面（已自动设置班级）
+  if (user.role === 'audience' && authStore.hasSelectedClass) {
+    // 初始化系统状态和辩论进度
+    await systemStore.fetchState()
+    await systemStore.fetchDebateProgress()
     systemStore.connectWebSocket()
     router.push('/audience')
-  } else {
-    // 其他情况跳转到班级选择
+  } 
+  // 管理员、评委需要选择班级
+  else if (authStore.needSelectClass) {
+    router.push('/class-select')
+  } 
+  // 其他情况（学生等）
+  else {
     router.push('/class-select')
   }
 }
@@ -239,7 +244,7 @@ async function handleChangePassword() {
     
     // 继续进入系统
     if (pendingUser.value) {
-      proceedToNextPage(pendingUser.value)
+      await proceedToNextPage(pendingUser.value)
     }
   } catch (error) {
     ElMessage.error(error.detail || '密码修改失败')

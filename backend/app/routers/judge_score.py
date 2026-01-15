@@ -17,7 +17,43 @@ from app.schemas.judge_score import (
 )
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/judge-score", tags=["评委评分"])
+router = APIRouter(prefix="/judge-scores", tags=["评委评分"])
+
+
+@router.get("/debaters/{contest_id}")
+async def get_debaters(
+    contest_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取比赛中的所有辩手（供评委打分使用）"""
+    
+    # 验证比赛存在
+    result = await db.execute(select(Contest).where(Contest.id == contest_id))
+    contest = result.scalar_one_or_none()
+    if not contest:
+        raise HTTPException(status_code=404, detail="比赛不存在")
+    
+    # 获取所有辩手（有team_side和debater_position的用户）
+    result = await db.execute(
+        select(User)
+        .where(User.class_id == contest.class_id)
+        .where(User.team_side.isnot(None))
+        .where(User.debater_position.isnot(None))
+        .order_by(User.team_side, User.debater_position)
+    )
+    debaters = result.scalars().all()
+    
+    return [
+        {
+            "id": d.id,
+            "username": d.username,
+            "display_name": d.display_name,
+            "team_side": d.team_side,
+            "debater_position": d.debater_position
+        }
+        for d in debaters
+    ]
 
 
 @router.post("/submit", response_model=JudgeScoreResponse)
@@ -226,6 +262,7 @@ async def get_debater_rankings(
 
 
 @router.get("/progress/{contest_id}")
+@router.get("/progress/{contest_id}")
 async def get_scoring_progress(
     contest_id: int,
     current_user: User = Depends(get_current_user),
@@ -243,59 +280,63 @@ async def get_scoring_progress(
     if not contest:
         raise HTTPException(status_code=404, detail="比赛不存在")
     
-    # 统计评委总数
-    result = await db.execute(
-        select(func.count(User.id))
-        .where(User.class_id == contest.class_id)
-        .where(User.role.in_([UserRole.judge, UserRole.teacher]))
-    )
-    total_judges = result.scalar() or 0
-    
-    # 统计辩手总数
-    result = await db.execute(
-        select(func.count(User.id))
-        .where(User.class_id == contest.class_id)
-        .where(User.team_side.isnot(None))
-    )
-    total_debaters = result.scalar() or 0
-    
-    # 统计已提交评分数
-    result = await db.execute(
-        select(func.count(JudgeScore.id))
-        .where(JudgeScore.contest_id == contest_id)
-    )
-    submitted_scores = result.scalar() or 0
-    
-    # 计算预期总评分数（每个评委为每个辩手评分）
-    expected_total_scores = total_judges * total_debaters
-    
-    # 获取未提交评分的评委
+    # 1. 统计需要参与评分的评委列表（角色为 judge 或 teacher）
     result = await db.execute(
         select(User.id, User.display_name)
         .where(User.class_id == contest.class_id)
         .where(User.role.in_([UserRole.judge, UserRole.teacher]))
     )
     all_judges = result.all()
+    total_judges = len(all_judges)
     
-    # 获取已提交评分的评委
+    # 2. 统计需要被评分的辩手总数
     result = await db.execute(
-        select(func.distinct(JudgeScore.judge_id))
-        .where(JudgeScore.contest_id == contest_id)
+        select(func.count(User.id))
+        .where(User.class_id == contest.class_id)
+        .where(User.team_side.isnot(None))
+        .where(User.debater_position.isnot(None))
     )
-    submitted_judge_ids = {row[0] for row in result.all()}
+    total_debaters = result.scalar() or 0
     
-    # 找出未提交的评委
-    not_submitted_judges = [
-        {"id": judge_id, "display_name": display_name}
-        for judge_id, display_name in all_judges
-        if judge_id not in submitted_judge_ids
-    ]
+    if total_debaters == 0 or total_judges == 0:
+        return {
+            "total_judges": total_judges,
+            "total_debaters": total_debaters,
+            "completed_judges": 0,
+            "completion_percentage": 0,
+            "not_submitted_judges": [{"id": j.id, "display_name": j.display_name} for j in all_judges]
+        }
+    
+    # 3. 统计每个评委已提交的评分数量
+    result = await db.execute(
+        select(JudgeScore.judge_id, func.count(JudgeScore.id))
+        .where(JudgeScore.contest_id == contest_id)
+        .group_by(JudgeScore.judge_id)
+    )
+    judge_score_counts = dict(result.all())  # {judge_id: score_count}
+    
+    # 4. 判断哪些评委已完成所有评分
+    completed_judges = 0
+    not_submitted_judges = []
+    
+    for judge_id, display_name in all_judges:
+        count = judge_score_counts.get(judge_id, 0)
+        # 只有当提交数等于（或大于）辩手总数时，才算完成
+        if count >= total_debaters:
+            completed_judges += 1
+        else:
+            not_submitted_judges.append({
+                "id": judge_id, 
+                "display_name": display_name,
+                "progress": f"{count}/{total_debaters}"
+            })
     
     return {
         "total_judges": total_judges,
         "total_debaters": total_debaters,
-        "submitted_scores": submitted_scores,
-        "expected_total_scores": expected_total_scores,
-        "completion_percentage": round((submitted_scores / expected_total_scores * 100) if expected_total_scores > 0 else 0, 1),
+        "completed_judges": completed_judges,
+        "expected_total_scores": total_judges * total_debaters,  # 保持兼容
+        "submitted_scores": sum(judge_score_counts.values()),    # 保持兼容
+        "completion_percentage": round((completed_judges / total_judges * 100) if total_judges > 0 else 0, 1),
         "not_submitted_judges": not_submitted_judges
     }

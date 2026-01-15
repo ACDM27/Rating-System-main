@@ -12,6 +12,8 @@ class Contest(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"), nullable=False)
     topic: Mapped[str] = mapped_column(String(500), nullable=False)
+    pro_topic: Mapped[str] = mapped_column(String(500), nullable=True)
+    con_topic: Mapped[str] = mapped_column(String(500), nullable=True)
     pro_team_name: Mapped[str] = mapped_column(String(100), nullable=False)
     con_team_name: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

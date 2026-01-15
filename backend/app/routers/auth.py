@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -227,3 +227,14 @@ async def set_topic(
     await db.commit()
     
     return {"message": "主题设置成功", "topic": user.topic}
+
+
+@router.get("/classes", response_model=list[ClassInfo])
+async def get_classes(
+    workspace_id: int = Query(1),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取指定工作区的所有班级（无需登录，用于大屏展示）"""
+    result = await db.execute(select(Class).where(Class.workspace_id == workspace_id))
+    classes = result.scalars().all()
+    return [ClassInfo(id=c.id, name=c.name) for c in classes]

@@ -4,11 +4,11 @@ from typing import Dict, Any, Optional
 
 from app.models.system_settings import SystemSettings, SystemStage
 from app.models.user import User
-from app.models.score_record import ScoreRecord, ScorePhase
+
 from app.models.contest import Contest
 from app.models.vote_record import VoteRecord
 from app.models.judge_score import JudgeScore
-from app.services.score import get_score_progress
+
 from app.websocket import manager
 
 async def broadcast_latest_state(db: AsyncSession, class_id: int):
@@ -32,41 +32,22 @@ async def broadcast_latest_state(db: AsyncSession, class_id: int):
 
     # 3. 计算平均分
     teacher_avg_score = None
-    # 教师平均分：在评分阶段和结束阶段都计算
-    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_TEACHER, SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
-        avg_result = await db.execute(
-            select(func.avg(ScoreRecord.total_score))
-            .where(ScoreRecord.class_id == class_id)
-            .where(ScoreRecord.target_team_id == settings.current_team_id)
-            .where(ScoreRecord.phase == ScorePhase.teacher_eval)
-        )
-        avg_value = avg_result.scalar()
-        if avg_value is not None:
-            teacher_avg_score = round(float(avg_value), 2)
-            
+    # 移除旧的评分逻辑，因为ScoreRecord模型缺失
+    # if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_TEACHER, SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+    #     ...
+
     student_avg_score = None
-    # 学生平均分：在学生互评和结束阶段计算
-    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
-        avg_result = await db.execute(
-            select(func.avg(ScoreRecord.total_score))
-            .where(ScoreRecord.class_id == class_id)
-            .where(ScoreRecord.target_team_id == settings.current_team_id)
-            .where(ScoreRecord.phase == ScorePhase.student_eval)
-        )
-        avg_value = avg_result.scalar()
-        if avg_value is not None:
-            student_avg_score = round(float(avg_value), 2)
+    # if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+    #     ...
 
     # 4. 计算评分完成状态
     teacher_scoring_completed = False
-    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_TEACHER, SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
-        submitted, total, _ = await get_score_progress(db, settings.current_team_id, ScorePhase.teacher_eval, class_id)
-        teacher_scoring_completed = (submitted == total and total > 0)
+    # if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_TEACHER, SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+    #     ...
         
     student_scoring_completed = False
-    if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
-        submitted, total, _ = await get_score_progress(db, settings.current_team_id, ScorePhase.student_eval, class_id)
-        student_scoring_completed = (submitted == total and total > 0)
+    # if settings.current_team_id and settings.current_stage in [SystemStage.SCORING_STUDENT, SystemStage.FINISHED]:
+    #     ...
 
     # 5. 广播
     await manager.broadcast_state_update(
