@@ -10,7 +10,7 @@ RUN npm install -g pnpm --registry=https://registry.npmmirror.com
 COPY package.json pnpm-lock.yaml ./
 
 # Install dependencies (use mirror for speed in China)
-RUN pnpm install --frozen-lockfile --registry=https://registry.npmmirror.com
+RUN pnpm install --no-frozen-lockfile --registry=https://registry.npmmirror.com
 
 # Copy source code
 COPY . .
