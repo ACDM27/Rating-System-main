@@ -64,3 +64,12 @@ export function getProgress(classId) {
 export function resetSystem(classId) {
     return api.post('/admin/reset-system', {}, { params: { class_id: classId } })
 }
+
+export function updateUserDebateRole(userId, teamSide, debaterPosition) {
+    return api.put(`/admin/users/${userId}/debate-role`, null, {
+        params: {
+            team_side: teamSide,
+            debater_position: debaterPosition
+        }
+    })
+}
