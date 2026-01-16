@@ -101,7 +101,8 @@ export const useSystemStore = defineStore('system', () => {
         // 假设 socket 端口也是 8000 (根据之前的信息 python -m uvicorn ... --port 8000)
         // 如果前端是 5173，后端是 8000，则需要写死或配置
         // 之前代码是 `ws://${window.location.hostname}:8000/ws`，保持一致
-        let wsUrl = `ws://${window.location.hostname}:8000/ws`
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+        let wsUrl = `${protocol}//${window.location.host}/ws`
         if (classId) {
             wsUrl += `?class_id=${classId}`
         }

@@ -560,7 +560,8 @@ function formatElapsedTime(seconds) {
 function connectWebSocket() {
   if (!contestInfo.value) return
   
-  const wsUrl = `ws://${window.location.hostname}:8000/ws?class_id=${contestInfo.value.class_id}`
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsUrl = `${protocol}//${window.location.host}/ws?class_id=${contestInfo.value.class_id}`
   ws = new WebSocket(wsUrl)
   
   ws.onmessage = (event) => {
