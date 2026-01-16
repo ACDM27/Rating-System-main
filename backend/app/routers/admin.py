@@ -743,67 +743,86 @@ async def reset_debate_system(
     db: AsyncSession = Depends(get_db)
 ):
     """重置辩论系统到初始状态"""
-    # 1. 获取该班级的所有比赛
-    contests_result = await db.execute(
-        select(Contest).where(Contest.class_id == class_id)
-    )
-    contests = contests_result.scalars().all()
-    contest_ids = [c.id for c in contests]
-    
-    # 2. 删除所有投票记录
-    if contest_ids:
-        await db.execute(
-            delete(VoteRecord).where(VoteRecord.contest_id.in_(contest_ids))
+    try:
+        # 1. 获取该班级的所有比赛
+        contests_result = await db.execute(
+            select(Contest).where(Contest.class_id == class_id)
         )
+        contests = contests_result.scalars().all()
+        contest_ids = [c.id for c in contests]
+        print(f"找到 {len(contests)} 个比赛需要删除")
         
-        # 3. 删除所有评委评分记录
-        await db.execute(
-            delete(JudgeScore).where(JudgeScore.contest_id.in_(contest_ids))
-        )
+        # 2. 删除所有投票记录
+        if contest_ids:
+            vote_result = await db.execute(
+                delete(VoteRecord).where(VoteRecord.contest_id.in_(contest_ids))
+            )
+            print(f"已删除投票记录")
+            
+            # 3. 删除所有评委评分记录
+            score_result = await db.execute(
+                delete(JudgeScore).where(JudgeScore.contest_id.in_(contest_ids))
+            )
+            print(f"已删除评分记录")
+            
+            # 4. 删除所有比赛
+            contest_result = await db.execute(
+                delete(Contest).where(Contest.class_id == class_id)
+            )
+            print(f"已删除比赛记录")
         
-        # 4. 删除所有比赛
-        await db.execute(
-            delete(Contest).where(Contest.class_id == class_id)
+        # 5. 重置系统设置
+        settings_result = await db.execute(
+            select(SystemSettings).where(SystemSettings.class_id == class_id)
         )
-    
-    # 5. 重置系统设置
-    settings_result = await db.execute(
-        select(SystemSettings).where(SystemSettings.class_id == class_id)
-    )
-    settings = settings_result.scalar_one_or_none()
-    
-    if settings:
-        settings.current_stage = SystemStage.IDLE
-        settings.contest_id = None
-        settings.pre_voting_enabled = False
-        settings.post_voting_enabled = False
-        settings.judge_scoring_enabled = False
-        settings.results_revealed = False
-        settings.update_time = int(time.time() * 1000)
-    else:
-        # 如果不存在设置，创建一个默认的
-        settings = SystemSettings(class_id=class_id)
-        db.add(settings)
-    
-    # 6. 删除所有学生用户（辩手）
-    await db.execute(
-        delete(User)
-        .where(User.class_id == class_id)
-        .where(User.role == UserRole.student)
-    )
-    
-    await db.commit()
-    
-    # 7. 广播系统重置消息
-    await manager.broadcast_to_class(class_id, {
-        "type": "STATE_UPDATE",
-        "data": {
-            "current_stage": "IDLE",
-            "update_time": settings.update_time
-        }
-    })
-    
-    return {"message": "系统已重置到初始状态"}
+        settings = settings_result.scalar_one_or_none()
+        
+        if settings:
+            settings.current_stage = SystemStage.IDLE
+            settings.contest_id = None
+            settings.pre_voting_enabled = False
+            settings.post_voting_enabled = False
+            settings.judge_scoring_enabled = False
+            settings.results_revealed = False
+            settings.update_time = int(time.time() * 1000)
+            print(f"已重置系统设置")
+        else:
+            # 如果不存在设置，创建一个默认的
+            settings = SystemSettings(class_id=class_id)
+            db.add(settings)
+            print(f"已创建默认系统设置")
+        
+        # 6. 删除所有学生用户（辩手）
+        user_result = await db.execute(
+            delete(User)
+            .where(User.class_id == class_id)
+            .where(User.role == UserRole.student)
+        )
+        print(f"已删除辩手用户")
+        
+        await db.commit()
+        print(f"事务已提交")
+        
+        # 7. 广播系统重置消息
+        try:
+            await manager.broadcast_to_class(class_id, {
+                "type": "STATE_UPDATE",
+                "data": {
+                    "current_stage": "IDLE",
+                    "update_time": settings.update_time
+                }
+            })
+            print(f"已广播重置消息")
+        except Exception as broadcast_error:
+            print(f"广播消息失败（非致命错误）: {str(broadcast_error)}")
+        
+        return {"message": "系统已重置到初始状态"}
+    except Exception as e:
+        await db.rollback()
+        print(f"重置系统失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"重置系统失败: {str(e)}")
 
 
 @router.get("/debate/results/{contest_id}")
