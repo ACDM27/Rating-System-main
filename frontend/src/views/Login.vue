@@ -205,11 +205,24 @@ async function proceedToNextPage(user) {
 
   // 评委直接进入评分页面
   if (user.role === 'judge') {
-    // 初始化系统状态和辩论进度
-    await systemStore.fetchState()
-    await systemStore.fetchDebateProgress()
-    systemStore.connectWebSocket()
-    router.push('/judge')
+    // 评委需要有可用的场次
+    if (authStore.availableClasses && authStore.availableClasses.length > 0) {
+      // 如果没有当前场次，自动选择第一个可用场次
+      if (!authStore.currentClassId) {
+        const firstClass = authStore.availableClasses[0]
+        authStore.currentClassId = firstClass.id
+        console.log('评委自动选择场次:', firstClass.name, 'ID:', firstClass.id)
+      }
+      
+      // 初始化系统状态和辩论进度
+      await systemStore.fetchState()
+      await systemStore.fetchDebateProgress()
+      systemStore.connectWebSocket()
+      router.push('/judge')
+    } else {
+      ElMessage.error('您还未被分配到任何场次，请联系管理员')
+      authStore.logout()
+    }
     return
   }
 

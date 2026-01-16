@@ -17,6 +17,22 @@
         </div>
       </div>
       <div class="judge-info">
+        <!-- 场次选择（如果评委有多个场次） -->
+        <el-select 
+          v-if="authStore.availableClasses && authStore.availableClasses.length > 1"
+          v-model="authStore.currentClassId" 
+          @change="handleClassChange"
+          size="small"
+          style="margin-right: 12px; width: 150px;"
+        >
+          <el-option
+            v-for="cls in authStore.availableClasses"
+            :key="cls.id"
+            :label="cls.name"
+            :value="cls.id"
+          />
+        </el-select>
+        
         <span class="judge-name">评委：{{ authStore.user?.display_name }}</span>
         <el-button size="small" type="danger" @click="handleLogout">退出</el-button>
       </div>
@@ -512,6 +528,16 @@ async function submitScore(debaterId) {
   } finally {
     submittingScore.value = null
   }
+}
+
+async function handleClassChange() {
+  console.log('场次已切换到:', authStore.currentClassId)
+  // 重新加载所有数据
+  await loadContestInfo()
+  await loadDebaters()
+  await loadSubmittedScores()
+  await systemStore.fetchState()
+  ElMessage.success('已切换场次')
 }
 
 function handleLogout() {
