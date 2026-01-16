@@ -83,8 +83,10 @@ async def import_students(data: UserImport, db: AsyncSession = Depends(get_db)):
     await db.commit()
     
     return {
-        "message": f"成功导入 {success_count} 个账号",
-        "errors": errors
+        "success_count": success_count,
+        "created_count": success_count,  # 保持与评委导入一致
+        "errors": errors,
+        "message": f"成功导入 {success_count} 个账号" + (f"，{len(errors)} 个失败" if errors else "")
     }
 
 
