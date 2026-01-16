@@ -197,6 +197,12 @@ async function handleLogin() {
 }
 
 async function proceedToNextPage(user) {
+  // 管理员直接进入管理后台
+  if (user.role === 'admin') {
+     router.push('/admin/debate')
+     return
+  }
+
   // 观众直接进入投票页面（已自动设置班级）
   if (user.role === 'audience' && authStore.hasSelectedClass) {
     // 初始化系统状态和辩论进度
@@ -205,7 +211,7 @@ async function proceedToNextPage(user) {
     systemStore.connectWebSocket()
     router.push('/audience')
   } 
-  // 管理员、评委需要选择班级
+  // 评委需要选择班级
   else if (authStore.needSelectClass) {
     router.push('/class-select')
   } 

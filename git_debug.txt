@@ -1,0 +1,20 @@
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	deleted:    backend/.dockerignore
+	deleted:    frontend/.dockerignore
+	modified:   frontend/.env.production
+	modified:   frontend/src/stores/system.js
+	modified:   frontend/src/views/screen/Display.vue
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	debug_git.bat
+	git_debug.txt
+
+no changes added to commit (use "git add" and/or "git commit -a")
+origin	https://github.com/ACDM27/Rating-System-main.git (fetch)
+origin	https://github.com/ACDM27/Rating-System-main.git (push)

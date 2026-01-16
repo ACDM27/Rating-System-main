@@ -43,13 +43,13 @@ const routes = [
         path: '/admin/debaters',
         name: 'AdminDebaters',
         component: () => import('../views/admin/DebaterManage.vue'),
-        meta: { requiresAuth: true, role: 'admin', requiresClass: true }
+        meta: { requiresAuth: true, role: 'admin' }
     },
     {
         path: '/admin/debate',
         name: 'AdminDebate',
         component: () => import('../views/admin/DebateDashboard.vue'),
-        meta: { requiresAuth: true, role: 'admin', requiresClass: true }
+        meta: { requiresAuth: true, role: 'admin' }
     },
     // 评委路由
     {
