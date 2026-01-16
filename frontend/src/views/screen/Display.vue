@@ -59,10 +59,24 @@
             
             <div class="voting-progress">
               <h3>{{ stage === 'PRE_VOTING' ? '赛前投票进行中' : '赛后投票进行中' }}</h3>
+              
+              <!-- 投票总数 -->
               <div class="vote-count">
-                <span class="count-number">{{ totalVotes }}</span>
-                <span class="count-label">人已投票</span>
+                <span class="count-number">{{ currentVotingProgress.submitted || 0 }}</span>
+                <span class="count-label">/ {{ currentVotingProgress.total || 0 }} 人已投票</span>
               </div>
+              
+              <!-- 进度条 -->
+              <div class="progress-bar-container">
+                <div class="progress-bar-bg">
+                  <div 
+                    class="progress-bar-fill" 
+                    :style="{ width: currentVotingProgress.percentage + '%' }"
+                  ></div>
+                </div>
+                <div class="progress-percentage">{{ currentVotingProgress.percentage || 0 }}%</div>
+              </div>
+              
               <div class="progress-note">
                 <p>投票分布将在结果揭晓时公布</p>
               </div>
@@ -79,12 +93,25 @@
           <div v-else-if="stage === 'JUDGE_SCORING'" class="scoring-state">
             <div class="big-text">评委评分中</div>
             <div class="sub-text">请等待评委完成评分</div>
+            
+            <!-- 评分进度详情 -->
             <div class="scoring-progress" v-if="debateProgress.judge_scoring_progress">
               <div class="progress-circle">
                 <span class="progress-number">{{ debateProgress.judge_scoring_progress.submitted }}</span>
                 <span class="progress-total">/ {{ debateProgress.judge_scoring_progress.total }}</span>
               </div>
               <p>评委已提交评分</p>
+              
+              <!-- 进度条 -->
+              <div class="progress-bar-container" style="margin-top: 20px;">
+                <div class="progress-bar-bg">
+                  <div 
+                    class="progress-bar-fill scoring" 
+                    :style="{ width: debateProgress.judge_scoring_progress.percentage + '%' }"
+                  ></div>
+                </div>
+                <div class="progress-percentage">{{ debateProgress.judge_scoring_progress.percentage || 0 }}%</div>
+              </div>
             </div>
           </div>
 
@@ -377,6 +404,19 @@ const debateStageText = computed(() => {
 
 const debateStageClass = computed(() => {
   return `debate-stage-${stage.value?.toLowerCase()}`
+})
+
+// 当前投票进度（根据当前阶段）
+const currentVotingProgress = computed(() => {
+  if (!debateProgress.value) return { submitted: 0, total: 0, percentage: 0 }
+  
+  if (stage.value === 'PRE_VOTING') {
+    return debateProgress.value.pre_voting_progress || { submitted: 0, total: 0, percentage: 0 }
+  } else if (stage.value === 'POST_VOTING') {
+    return debateProgress.value.post_voting_progress || { submitted: 0, total: 0, percentage: 0 }
+  }
+  
+  return { submitted: 0, total: 0, percentage: 0 }
 })
 
 // 传统答辩阶段文本和样式
@@ -1775,5 +1815,67 @@ function handleMessage(message) {
   color: rgba(255, 255, 255, 0.9);
   margin: 0;
   letter-spacing: 2px;
+}
+
+/* 进度条样式 */
+.progress-bar-container {
+  width: 100%;
+  max-width: 600px;
+  margin: 30px auto;
+}
+
+.progress-bar-bg {
+  width: 100%;
+  height: 40px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #67c23a 0%, #85ce61 100%);
+  border-radius: 20px;
+  transition: width 0.5s ease;
+  box-shadow: 0 0 15px rgba(103, 194, 58, 0.5);
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-bar-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.3) 50%,
+    transparent 100%
+  );
+  animation: shimmer 2s infinite;
+}
+
+.progress-bar-fill.scoring {
+  background: linear-gradient(90deg, #409eff 0%, #79bbff 100%);
+  box-shadow: 0 0 15px rgba(64, 158, 255, 0.5);
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.progress-percentage {
+  text-align: center;
+  font-size: 32px;
+  font-weight: bold;
+  color: #fff;
+  margin-top: 15px;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 </style>
