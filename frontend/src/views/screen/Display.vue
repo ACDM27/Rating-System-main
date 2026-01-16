@@ -51,9 +51,9 @@
           <!-- 投票引导阶段 -->
           <div v-if="stage === 'PRE_VOTING' || stage === 'POST_VOTING'" class="voting-state">
             <div class="qr-section">
-              <div class="qr-placeholder">
-                <el-icon class="qr-icon"><Expand /></el-icon>
-                <p>扫码参与投票</p>
+              <div class="qr-container">
+                <img src="/assest/login.png" alt="扫码参与投票" class="qr-image" />
+                <p class="qr-text">扫码参与投票</p>
               </div>
             </div>
             
@@ -1743,5 +1743,37 @@ function handleMessage(message) {
 .d-team-name-text {
   font-size: 14px;
   color: rgba(255, 255, 255, 0.7);
+}
+
+/* 二维码容器样式 */
+.qr-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 30px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  border: 2px dashed rgba(255, 255, 255, 0.3);
+  backdrop-filter: blur(10px);
+}
+
+.qr-image {
+  width: 250px;
+  height: 250px;
+  object-fit: contain;
+  border-radius: 12px;
+  background: white;
+  padding: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.qr-text {
+  font-size: 24px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  margin: 0;
+  letter-spacing: 2px;
 }
 </style>
