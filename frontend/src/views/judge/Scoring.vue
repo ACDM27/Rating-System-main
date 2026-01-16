@@ -415,7 +415,7 @@ async function loadDebaters() {
 async function loadSubmittedScores() {
   try {
     if (contestInfo.value) {
-      submittedScores.value = await getJudgeScores(contestInfo.value.id, authStore.user.id)
+      submittedScores.value = await getJudgeScores(contestInfo.value.id)
     }
   } catch (error) {
     console.error('获取已提交评分失败:', error)
