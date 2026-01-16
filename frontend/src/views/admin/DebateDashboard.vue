@@ -633,6 +633,8 @@ async function handleCreateContest() {
       contestForm.value.conTopic
     )
     await loadCurrentContest()
+    // 创建比赛后立即加载记录
+    await loadRecords()
     ElMessage.success('比赛创建成功')
   } catch (error) {
     ElMessage.error(error.detail || '创建比赛失败')
@@ -677,12 +679,16 @@ function startProgressPolling() {
   progressInterval = setInterval(async () => {
     if (currentContest.value && authStore.currentClassId) {
       try {
+        // 更新进度信息
         debateProgress.value = await getDebateProgress(authStore.currentClassId)
+        
+        // 自动刷新投票和评分记录
+        await loadRecords()
       } catch (error) {
         console.error('获取进度失败:', error)
       }
     }
-  }, 3000)
+  }, 5000) // 每5秒更新一次
 }
 
 async function handleSaveDebaterAssignments() {
