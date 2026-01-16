@@ -44,6 +44,27 @@ export function getTeams(classId) {
     return api.get('/admin/teams', { params: { class_id: classId } })
 }
 
+// ===== 场次管理 =====
+export function createClass(name, workspaceId) {
+    return api.post('/admin/classes', null, {
+        params: {
+            name: name,
+            workspace_id: workspaceId
+        }
+    })
+}
+
+export function getClasses(workspaceId) {
+    return api.get('/admin/classes', {
+        params: { workspace_id: workspaceId }
+    })
+}
+
+export function deleteClass(classId) {
+    return api.delete(`/admin/classes/${classId}`)
+}
+
+
 // ===== 系统状态 =====
 export function getSystemState(classId) {
     return api.get('/admin/state', { params: { class_id: classId } })

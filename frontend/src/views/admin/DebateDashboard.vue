@@ -16,6 +16,14 @@
             :value="cls.id"
           />
         </el-select>
+        <el-button 
+          type="primary" 
+          @click="showCreateClassDialog = true"
+          style="margin-left: 12px;"
+          icon="Plus"
+        >
+          新增场次
+        </el-button>
       </div>
       <div class="header-actions">
         <span class="admin-name">{{ authStore.user?.display_name }}</span>
@@ -391,6 +399,34 @@
         </el-button>
       </template>
     </el-dialog>
+    
+    <!-- 新增场次对话框 -->
+    <el-dialog 
+      v-model="showCreateClassDialog" 
+      title="新增比赛场次" 
+      width="400px"
+    >
+      <el-form :model="createClassForm" label-width="80px">
+        <el-form-item label="场次名称">
+          <el-input 
+            v-model="createClassForm.name" 
+            placeholder="例如：初赛、复赛、决赛等"
+            maxlength="50"
+          />
+        </el-form-item>
+      </el-form>
+      
+      <template #footer>
+        <el-button @click="showCreateClassDialog = false">取消</el-button>
+        <el-button 
+          type="primary" 
+          @click="handleCreateClass" 
+          :loading="creatingClass"
+        >
+          创建场次
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -409,7 +445,7 @@ import {
   updateUserDebateRole,
   resetDebateSystem
 } from '../../api/debate'
-import { getTeams, createStudent } from '../../api/admin'
+import { getTeams, createStudent, createClass, getClasses } from '../../api/admin'
 import api from '../../api/index'
 
 const router = useRouter()
@@ -466,6 +502,13 @@ const debateProgress = ref({})
 const showDebaterDialog = ref(false)
 const savingAssignments = ref(false)
 const creatingContest = ref(false)
+
+// 新增场次相关
+const showCreateClassDialog = ref(false)
+const creatingClass = ref(false)
+const createClassForm = ref({
+  name: ''
+})
 
 const contestForm = ref({
   topic: '',
@@ -793,6 +836,45 @@ async function handleResetSystem() {
     if (error !== 'cancel') {
       ElMessage.error(error.detail || '重置失败')
     }
+  }
+}
+
+async function handleCreateClass() {
+  if (!createClassForm.value.name || !createClassForm.value.name.trim()) {
+    ElMessage.warning('请输入场次名称')
+    return
+  }
+  
+  creatingClass.value = true
+  try {
+    // 获取管理员的工作空间ID
+    const workspaceId = authStore.user?.workspace_id || 1
+    
+    // 创建场次
+    const result = await createClass(createClassForm.value.name.trim(), workspaceId)
+    
+    ElMessage.success('场次创建成功')
+    
+    // 刷新场次列表
+    const classes = await getClasses(workspaceId)
+    authStore.availableClasses = classes
+    
+    // 自动切换到新场次
+    if (result.id) {
+      authStore.switchClass(result.id, result.name)
+      selectedClassId.value = result.id
+      await loadCurrentContest()
+      await loadAvailableUsers()
+      await systemStore.fetchState()
+    }
+    
+    // 关闭对话框并重置表单
+    showCreateClassDialog.value = false
+    createClassForm.value.name = ''
+  } catch (error) {
+    ElMessage.error(error.detail || error.message || '创建场次失败')
+  } finally {
+    creatingClass.value = false
   }
 }
 

@@ -356,6 +356,84 @@ async def get_progress(class_id: int = Query(...), db: AsyncSession = Depends(ge
     )
 
 
+# ===== 场次管理接口 =====
+
+@router.post("/classes")
+async def create_class(
+    name: str = Query(...),
+    workspace_id: int = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """创建新的比赛场次"""
+    # 检查场次名称是否已存在
+    result = await db.execute(
+        select(Class)
+        .where(Class.workspace_id == workspace_id)
+        .where(Class.name == name)
+    )
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="场次名称已存在")
+    
+    # 创建场次
+    class_ = Class(
+        name=name,
+        workspace_id=workspace_id
+    )
+    db.add(class_)
+    await db.commit()
+    await db.refresh(class_)
+    
+    # 为新场次创建系统设置
+    settings = SystemSettings(
+        class_id=class_.id,
+        current_stage=SystemStage.IDLE
+    )
+    db.add(settings)
+    await db.commit()
+    
+    return {
+        "id": class_.id,
+        "name": class_.name,
+        "workspace_id": class_.workspace_id,
+        "message": "场次创建成功"
+    }
+
+
+@router.get("/classes")
+async def get_classes(
+    workspace_id: int = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取工作空间的所有场次"""
+    result = await db.execute(
+        select(Class).where(Class.workspace_id == workspace_id)
+    )
+    classes = result.scalars().all()
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "workspace_id": c.workspace_id
+        }
+        for c in classes
+    ]
+
+
+@router.delete("/classes/{class_id}")
+async def delete_class(
+    class_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """删除场次（会级联删除相关数据）"""
+    class_ = await db.get(Class, class_id)
+    if not class_:
+        raise HTTPException(status_code=404, detail="场次不存在")
+    
+    await db.delete(class_)
+    await db.commit()
+    return {"message": "场次删除成功"}
+
+
 # ===== 辩论赛专用接口 =====
 
 @router.post("/debate/contest")

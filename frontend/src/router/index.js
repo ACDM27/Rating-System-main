@@ -16,12 +16,6 @@ const routes = [
         name: 'AdminLogin',
         component: () => import('../views/AdminLogin.vue')
     },
-    {
-        path: '/class-select',
-        name: 'ClassSelect',
-        component: () => import('../views/ClassSelect.vue'),
-        meta: { requiresAuth: true }
-    },
     // 管理员路由 - 辩论赛管理
     {
         path: '/admin',
@@ -56,14 +50,14 @@ const routes = [
         path: '/judge',
         name: 'JudgeScoring',
         component: () => import('../views/judge/Scoring.vue'),
-        meta: { requiresAuth: true, role: 'judge', requiresClass: true }
+        meta: { requiresAuth: true, role: 'judge' }
     },
     // 观众路由
     {
         path: '/audience',
         name: 'AudienceVoting',
         component: () => import('../views/audience/Voting.vue'),
-        meta: { requiresAuth: true, role: 'audience', requiresClass: true }
+        meta: { requiresAuth: true, role: 'audience' }
     },
     // 大屏路由
     {
@@ -98,19 +92,6 @@ router.beforeEach((to, from, next) => {
         next(roleRoutes[authStore.user?.role] || '/login')
         return
     }
-
-    // 检查是否需要选择班级
-    if (to.meta.requiresClass && !authStore.hasSelectedClass) {
-        // 观众不需要手动选择班级
-        if (authStore.user?.role === 'audience' && authStore.user?.class_id) {
-            authStore.currentClassId = authStore.user.class_id
-            next()
-        } else {
-            next('/class-select')
-        }
-        return
-    }
-
     next()
 })
 

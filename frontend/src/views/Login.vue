@@ -203,6 +203,16 @@ async function proceedToNextPage(user) {
      return
   }
 
+  // 评委直接进入评分页面
+  if (user.role === 'judge') {
+    // 初始化系统状态和辩论进度
+    await systemStore.fetchState()
+    await systemStore.fetchDebateProgress()
+    systemStore.connectWebSocket()
+    router.push('/judge')
+    return
+  }
+
   // 观众直接进入投票页面（已自动设置班级）
   if (user.role === 'audience' && authStore.hasSelectedClass) {
     // 初始化系统状态和辩论进度
@@ -210,15 +220,11 @@ async function proceedToNextPage(user) {
     await systemStore.fetchDebateProgress()
     systemStore.connectWebSocket()
     router.push('/audience')
-  } 
-  // 评委需要选择班级
-  else if (authStore.needSelectClass) {
-    router.push('/class-select')
-  } 
-  // 其他情况（学生等）
-  else {
-    router.push('/class-select')
+    return
   }
+
+  // 其他角色默认进入首页
+  router.push('/login')
 }
 
 async function handleChangePassword() {
