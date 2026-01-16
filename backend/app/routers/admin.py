@@ -752,26 +752,7 @@ async def reset_debate_system(
         contest_ids = [c.id for c in contests]
         print(f"找到 {len(contests)} 个比赛需要删除")
         
-        # 2. 删除所有投票记录
-        if contest_ids:
-            vote_result = await db.execute(
-                delete(VoteRecord).where(VoteRecord.contest_id.in_(contest_ids))
-            )
-            print(f"已删除投票记录")
-            
-            # 3. 删除所有评委评分记录
-            score_result = await db.execute(
-                delete(JudgeScore).where(JudgeScore.contest_id.in_(contest_ids))
-            )
-            print(f"已删除评分记录")
-            
-            # 4. 删除所有比赛
-            contest_result = await db.execute(
-                delete(Contest).where(Contest.class_id == class_id)
-            )
-            print(f"已删除比赛记录")
-        
-        # 5. 重置系统设置
+        # 2. 先重置系统设置（避免外键约束冲突）
         settings_result = await db.execute(
             select(SystemSettings).where(SystemSettings.class_id == class_id)
         )
@@ -779,18 +760,40 @@ async def reset_debate_system(
         
         if settings:
             settings.current_stage = SystemStage.IDLE
-            settings.contest_id = None
+            settings.contest_id = None  # 先清空外键引用
             settings.pre_voting_enabled = False
             settings.post_voting_enabled = False
             settings.judge_scoring_enabled = False
             settings.results_revealed = False
             settings.update_time = int(time.time() * 1000)
-            print(f"已重置系统设置")
+            print(f"已重置系统设置（包括清空 contest_id）")
         else:
             # 如果不存在设置，创建一个默认的
             settings = SystemSettings(class_id=class_id)
             db.add(settings)
             print(f"已创建默认系统设置")
+        
+        # 先刷新到数据库，确保外键引用已清空
+        await db.flush()
+        
+        # 3. 删除所有投票记录
+        if contest_ids:
+            vote_result = await db.execute(
+                delete(VoteRecord).where(VoteRecord.contest_id.in_(contest_ids))
+            )
+            print(f"已删除投票记录")
+            
+            # 4. 删除所有评委评分记录
+            score_result = await db.execute(
+                delete(JudgeScore).where(JudgeScore.contest_id.in_(contest_ids))
+            )
+            print(f"已删除评分记录")
+            
+            # 5. 删除所有比赛（此时外键已清空，可以安全删除）
+            contest_result = await db.execute(
+                delete(Contest).where(Contest.class_id == class_id)
+            )
+            print(f"已删除比赛记录")
         
         # 6. 删除所有学生用户（辩手）
         user_result = await db.execute(
