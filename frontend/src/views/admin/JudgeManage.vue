@@ -237,8 +237,15 @@ async function handleFileChange(event) {
         { type: 'warning' }
       )
       
-      const loadingMsg = ElMessage.loading('正在导入...')
-      await importTeachers({ judges })
+      const loadingMsg = ElMessage({
+        message: '正在导入...',
+        type: 'info',
+        duration: 0
+      })
+      await importTeachers({ 
+        class_id: classId.value,
+        users: judges 
+      })
       loadingMsg.close()
       
       ElMessage.success(`成功导入 ${judges.length} 个评委账号`)

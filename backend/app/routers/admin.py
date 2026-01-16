@@ -458,6 +458,19 @@ async def create_contest(
         con_topic=con_topic
     )
     db.add(contest)
+    await db.flush()  # 获取 contest.id
+    
+    # 更新系统设置中的当前比赛ID
+    result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
+    settings = result.scalar_one_or_none()
+    
+    if not settings:
+        settings = SystemSettings(class_id=class_id)
+        db.add(settings)
+    
+    settings.contest_id = contest.id
+    settings.update_time = int(time.time() * 1000)
+    
     await db.commit()
     await db.refresh(contest)
     return contest
@@ -469,13 +482,29 @@ async def get_current_contest(
     db: AsyncSession = Depends(get_db)
 ):
     """获取班级当前的最新比赛"""
-    result = await db.execute(
-        select(Contest)
-        .where(Contest.class_id == class_id)
-        .order_by(Contest.created_at.desc())
-        .limit(1)
+    # 优先从系统设置中获取当前激活的比赛ID
+    settings_result = await db.execute(
+        select(SystemSettings).where(SystemSettings.class_id == class_id)
     )
-    contest = result.scalar_one_or_none()
+    settings = settings_result.scalar_one_or_none()
+    
+    contest = None
+    if settings and settings.contest_id:
+        # 如果系统设置指明了当前比赛，直接获取该比赛
+        contest_result = await db.execute(
+            select(Contest).where(Contest.id == settings.contest_id)
+        )
+        contest = contest_result.scalar_one_or_none()
+        
+    if not contest:
+        # 如果没有指定或指定的比赛不存在，降级为获取最新创建的比赛
+        result = await db.execute(
+            select(Contest)
+            .where(Contest.class_id == class_id)
+            .order_by(Contest.created_at.desc())
+            .limit(1)
+        )
+        contest = result.scalar_one_or_none()
     if not contest:
         raise HTTPException(status_code=404, detail="未找到比赛配置")
     return {"contest": contest}
@@ -525,24 +554,32 @@ async def get_debate_progress(
     db: AsyncSession = Depends(get_db)
 ):
     """获取投票和评分进度"""
-    result = await db.execute(
-        select(Contest)
-        .where(Contest.class_id == class_id)
-        .order_by(Contest.created_at.desc())
-        .limit(1)
+    # 获取系统设置以确定当前比赛
+    settings_result = await db.execute(
+        select(SystemSettings).where(SystemSettings.class_id == class_id)
     )
-    contest = result.scalar_one_or_none()
+    settings = settings_result.scalar_one_or_none()
+    
+    contest = None
+    if settings and settings.contest_id:
+        contest_result = await db.execute(
+            select(Contest).where(Contest.id == settings.contest_id)
+        )
+        contest = contest_result.scalar_one_or_none()
+        
+    if not contest:
+        result = await db.execute(
+            select(Contest)
+            .where(Contest.class_id == class_id)
+            .order_by(Contest.created_at.desc())
+            .limit(1)
+        )
+        contest = result.scalar_one_or_none()
     
     if not contest:
         return {}
         
     contest_id = contest.id
-    
-    # 获取系统设置以确定投票是否开启
-    settings_result = await db.execute(
-        select(SystemSettings).where(SystemSettings.class_id == class_id)
-    )
-    settings = settings_result.scalar_one_or_none()
     
     # 使用 SystemSettings 中的投票开启标志
     pre_voting_enabled = False
@@ -635,21 +672,26 @@ async def reveal_debate_results(
 ):
     """揭晓比赛结果"""
     try:
-        # 获取当前比赛
-        contest_result = await db.execute(
-            select(Contest)
-            .where(Contest.class_id == class_id)
-            .order_by(Contest.created_at.desc())
-            .limit(1)
-        )
-        contest = contest_result.scalar_one_or_none()
-        
-        if not contest:
-            raise HTTPException(status_code=404, detail="未找到比赛")
-        
-        # 更新系统状态
+        # 获取系统设置
         result = await db.execute(select(SystemSettings).where(SystemSettings.class_id == class_id))
         settings = result.scalar_one_or_none()
+
+        contest = None
+        if settings and settings.contest_id:
+            contest_result = await db.execute(
+                select(Contest).where(Contest.id == settings.contest_id)
+            )
+            contest = contest_result.scalar_one_or_none()
+            
+        if not contest:
+            # 获取最新比赛
+            contest_result = await db.execute(
+                select(Contest)
+                .where(Contest.class_id == class_id)
+                .order_by(Contest.created_at.desc())
+                .limit(1)
+            )
+            contest = contest_result.scalar_one_or_none()
         
         if settings:
             settings.current_stage = "RESULTS_REVEALED"
@@ -797,7 +839,35 @@ async def reset_debate_system(
             )
             print(f"已删除比赛记录")
         
-        # 6. 删除所有学生用户（辩手）
+        # 6. 删除所有相关用户（辩手、观众、评委）
+        # 6.1 获取该班级的评委ID列表
+        judge_ids_result = await db.execute(
+            select(TeacherClass.teacher_id).where(TeacherClass.class_id == class_id)
+        )
+        judge_ids = judge_ids_result.scalars().all()
+
+        # 6.2 删除评委关联
+        await db.execute(
+            delete(TeacherClass).where(TeacherClass.class_id == class_id)
+        )
+        print(f"已删除评委关联")
+
+        # 6.3 删除评委账号 (如果存在评委)
+        if judge_ids:
+            await db.execute(
+                delete(User).where(User.id.in_(judge_ids)).where(User.role == UserRole.judge)
+            )
+            print(f"已删除评委账号: {len(judge_ids)} 个")
+
+        # 6.4 删除观众用户
+        audience_result = await db.execute(
+            delete(User)
+            .where(User.class_id == class_id)
+            .where(User.role == UserRole.audience)
+        )
+        print(f"已删除观众用户")
+
+        # 6.5 删除辩手用户
         user_result = await db.execute(
             delete(User)
             .where(User.class_id == class_id)
