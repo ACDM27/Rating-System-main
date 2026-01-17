@@ -387,22 +387,7 @@ onMounted(async () => {
   
   // 连接 WebSocket
   systemStore.connectWebSocket()
-  
-  // 监听比赛更新事件
-  window.addEventListener('debate-contest-update', handleContestUpdate)
 })
-
-onUnmounted(() => {
-  window.removeEventListener('debate-contest-update', handleContestUpdate)
-})
-
-async function handleContestUpdate(event) {
-  console.log('Voting page received contest update:', event.detail)
-  // 重新加载比赛信息和相关数据
-  await loadContestInfo()
-  await loadMyVotes()
-  ElMessage.success('比赛信息已更新')
-}
 
 // 监听系统状态变化
 watch(() => systemStore.currentStage, async (newStage, oldStage) => {
@@ -430,8 +415,7 @@ async function loadMyVotes() {
   if (!contestInfo.value?.id) return
   try {
     const votes = await getMyVotes(contestInfo.value.id)
-    // 确保 votes 不为 null，避免 computed 属性报错
-    myVotes.value = votes || {}
+    myVotes.value = votes
   } catch (error) {
     console.error('获取投票记录失败', error)
   }
