@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 // 从环境变量读取后端 API 地址，默认为空（使用相对路径）
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
 const api = axios.create({
     baseURL: API_BASE,

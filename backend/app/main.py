@@ -51,11 +51,11 @@ app.add_middleware(
 )
 
 # 注册路由
-app.include_router(auth_router)
-app.include_router(admin_router)
-app.include_router(vote_router)
-app.include_router(judge_score_router)
-app.include_router(vote_records_router)
+app.include_router(auth_router, prefix="/api")
+app.include_router(admin_router, prefix="/api")
+app.include_router(vote_router, prefix="/api")
+app.include_router(judge_score_router, prefix="/api")
+app.include_router(vote_records_router, prefix="/api")
 
 
 @app.get("/")
