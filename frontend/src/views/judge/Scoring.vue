@@ -372,20 +372,6 @@ const scoringEnabled = computed(() => {
          (systemStore.debateProgress && systemStore.debateProgress.voting_enabled?.judge_scoring)
 })
 
-onMounted(async () => {
-  await loadContestInfo()
-  await loadDebaters()
-  await loadSubmittedScores()
-  await systemStore.fetchState()
-})
-
-// 监听系统状态变化
-watch(() => systemStore.currentStage, (newStage) => {
-  if (newStage === 'RESULTS_REVEALED') {
-    ElMessage.success('比赛结果已揭晓！')
-  }
-})
-
 // 监听系统更新时间（用于同步比赛信息更迭）
 watch(() => systemStore.updateTime, async () => {
   console.log('System state updated, reloading contest info...')
@@ -393,6 +379,29 @@ watch(() => systemStore.updateTime, async () => {
   await loadDebaters()
   await loadSubmittedScores()
 })
+
+onMounted(async () => {
+  await loadContestInfo()
+  await loadDebaters()
+  await loadSubmittedScores()
+  await systemStore.fetchState()
+  
+  // 监听比赛更新事件
+  window.addEventListener('debate-contest-update', handleContestUpdate)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('debate-contest-update', handleContestUpdate)
+})
+
+async function handleContestUpdate(event) {
+  console.log('Scoring page received contest update:', event.detail)
+  // 重新加载所有数据
+  await loadContestInfo()
+  await loadDebaters()
+  await loadSubmittedScores()
+  ElMessage.success('比赛信息已更新')
+}
 
 async function loadContestInfo() {
   try {
