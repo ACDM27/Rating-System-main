@@ -273,27 +273,18 @@ body {
   color: #666666;
 }
 
-/* 登录页面 */
-.login-container {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: #f5f5f5;
+/* Vue Transition Effects */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
 }
 
-.login-card {
-  width: 400px;
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
-  padding: 40px;
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
 }
 
-.login-title {
-  font-size: 28px;
-  font-weight: 600;
-  text-align: center;
-  margin-bottom: 32px;
-  color: #1a1a1a;
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
 }

@@ -430,7 +430,8 @@ async function loadMyVotes() {
   if (!contestInfo.value?.id) return
   try {
     const votes = await getMyVotes(contestInfo.value.id)
-    myVotes.value = votes
+    // 确保 votes 不为 null，避免 computed 属性报错
+    myVotes.value = votes || {}
   } catch (error) {
     console.error('获取投票记录失败', error)
   }
