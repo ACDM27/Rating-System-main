@@ -199,6 +199,15 @@ export const useSystemStore = defineStore('system', () => {
                 if (message.data.progress) {
                     debateProgress.value = message.data.progress
                 }
+
+                // 如果消息中包含比赛信息（可能是新比赛或重置为null），通知组件更新
+                if (message.data.contest !== undefined) {
+                    console.log('收到比赛变更通知:', message.data.contest)
+                    window.dispatchEvent(new CustomEvent('debate-contest-update', {
+                        detail: message.data.contest
+                    }))
+                }
+
                 console.log('辩论状态已更新, currentStage:', currentStage.value)
                 break
             case 'SCORE_PROGRESS':

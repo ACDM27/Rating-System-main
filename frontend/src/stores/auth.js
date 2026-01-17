@@ -116,6 +116,11 @@ export const useAuthStore = defineStore('auth', () => {
         }
     }
 
+    function updateAvailableClasses(classes) {
+        availableClasses.value = classes
+        localStorage.setItem('availableClasses', JSON.stringify(classes))
+    }
+
     return {
         token,
         user,
@@ -131,6 +136,7 @@ export const useAuthStore = defineStore('auth', () => {
         logout,
         restoreSession,
         needChangePassword,
-        needSetTopic
+        needSetTopic,
+        updateAvailableClasses
     }
 })

@@ -561,13 +561,29 @@ onMounted(async () => {
     await loadAvailableUsers()
     startProgressPolling()
   }
+  window.addEventListener('debate-contest-update', handleContestUpdate)
 })
 
 onUnmounted(() => {
   if (progressInterval) {
     clearInterval(progressInterval)
   }
+  window.removeEventListener('debate-contest-update', handleContestUpdate)
 })
+
+function handleContestUpdate(event) {
+  console.log('DebateDashboard 收到比赛更新:', event.detail)
+  const newContest = event.detail
+  // 更新当前比赛信息
+  currentContest.value = newContest
+  
+  // 如果是重置（null），清空记录
+  if (!newContest) {
+    voteRecords.value = []
+    judgeScores.value = []
+    ElMessage.info('系统已重置，请创建新比赛')
+  }
+}
 
 watch(() => authStore.currentClassId, async (newVal) => {
   if (newVal) {
@@ -863,7 +879,7 @@ async function handleCreateClass() {
     
     // 刷新场次列表
     const classes = await getClasses(workspaceId)
-    authStore.availableClasses = classes
+    authStore.updateAvailableClasses(classes)
     
     // 自动切换到新场次
     if (result.id) {

@@ -473,6 +473,32 @@ async def create_contest(
     
     await db.commit()
     await db.refresh(contest)
+    
+    # 获取更新后的设置以确保数据完整
+    await db.refresh(settings)
+
+    # 广播状态更新，通知所有端有了新的比赛
+    await manager.broadcast_debate_update(
+        stage=settings.current_stage.value if settings.current_stage else "IDLE",
+        contest={
+            "id": contest.id,
+            "topic": contest.topic,
+            "pro_team_name": contest.pro_team_name,
+            "con_team_name": contest.con_team_name,
+            "pro_topic": contest.pro_topic,
+            "con_topic": contest.con_topic
+        },
+        class_id=class_id,
+        voting_enabled={
+            "pre_voting": settings.pre_voting_enabled,
+            "post_voting": settings.post_voting_enabled,
+            "judge_scoring": settings.judge_scoring_enabled
+        },
+        results_revealed=settings.results_revealed,
+        progress={}, # 新比赛无进度
+        update_time=settings.update_time
+    )
+
     return contest
 
 
@@ -794,86 +820,46 @@ async def reset_debate_system(
         )
         contests = contests_result.scalars().all()
         contest_ids = [c.id for c in contests]
-        print(f"找到 {len(contests)} 个比赛需要删除")
+        # 3. 不删除历史数据，仅重置系统状态和当前场次关联
+        # 这样可以保留历史记录，同时“进入一个新的场次”
         
-        # 2. 先重置系统设置（避免外键约束冲突）
-        settings_result = await db.execute(
-            select(SystemSettings).where(SystemSettings.class_id == class_id)
-        )
-        settings = settings_result.scalar_one_or_none()
-        
-        if settings:
-            settings.current_stage = SystemStage.IDLE
-            settings.contest_id = None  # 先清空外键引用
-            settings.pre_voting_enabled = False
-            settings.post_voting_enabled = False
-            settings.judge_scoring_enabled = False
-            settings.results_revealed = False
-            settings.update_time = int(time.time() * 1000)
-            print(f"已重置系统设置（包括清空 contest_id）")
-        else:
-            # 如果不存在设置，创建一个默认的
-            settings = SystemSettings(class_id=class_id)
-            db.add(settings)
-            print(f"已创建默认系统设置")
-        
-        # 先刷新到数据库，确保外键引用已清空
-        await db.flush()
-        
-        # 3. 删除所有投票记录
-        if contest_ids:
-            vote_result = await db.execute(
-                delete(VoteRecord).where(VoteRecord.contest_id.in_(contest_ids))
-            )
-            print(f"已删除投票记录")
-            
-            # 4. 删除所有评委评分记录
-            score_result = await db.execute(
-                delete(JudgeScore).where(JudgeScore.contest_id.in_(contest_ids))
-            )
-            print(f"已删除评分记录")
-            
-            # 5. 删除所有比赛（此时外键已清空，可以安全删除）
-            contest_result = await db.execute(
-                delete(Contest).where(Contest.class_id == class_id)
-            )
-            print(f"已删除比赛记录")
-        
-        # 6. 删除所有相关用户（辩手、观众、评委）
-        # 6.1 获取该班级的评委ID列表
-        judge_ids_result = await db.execute(
-            select(TeacherClass.teacher_id).where(TeacherClass.class_id == class_id)
-        )
-        judge_ids = judge_ids_result.scalars().all()
-
-        # 6.2 删除评委关联
-        await db.execute(
-            delete(TeacherClass).where(TeacherClass.class_id == class_id)
-        )
-        print(f"已删除评委关联")
-
-        # 6.3 删除评委账号 (如果存在评委)
-        if judge_ids:
-            await db.execute(
-                delete(User).where(User.id.in_(judge_ids)).where(User.role == UserRole.judge)
-            )
-            print(f"已删除评委账号: {len(judge_ids)} 个")
-
-        # 6.4 删除观众用户
-        audience_result = await db.execute(
-            delete(User)
-            .where(User.class_id == class_id)
-            .where(User.role == UserRole.audience)
-        )
-        print(f"已删除观众用户")
-
-        # 6.5 删除辩手用户
-        user_result = await db.execute(
-            delete(User)
+        # 4. 重置该班级内所有用户的辩手角色 (释放辩手以便下一场分配)
+        # 获取该班级的所有学生用户
+        users_result = await db.execute(
+            select(User)
             .where(User.class_id == class_id)
             .where(User.role == UserRole.student)
         )
-        print(f"已删除辩手用户")
+        students = users_result.scalars().all()
+        
+        for student in students:
+            # 清除辩手角色和队伍关联
+            student.team_side = None
+            student.debater_position = None
+            # 注意：不修改 student.role，保持为 student
+            # 如果需要也可以在这里重置 role，但通常保持 student 即可
+            
+        print(f"已重置 {len(students)} 名学生的辩手状态")
+        
+        # 5. 广播更详细的重置消息，强制前端刷新
+        broadcast_data = {
+            "type": "debate_update", # 使用标准 update 消息
+            "data": {
+                "stage": "IDLE",
+                "contest": None, # 明确告知没有比赛
+                "class_id": class_id,
+                "voting_enabled": {
+                    "pre_voting": False,
+                    "post_voting": False,
+                    "judge_scoring": False
+                },
+                "results_revealed": False,
+                "progress": {},
+                "update_time": settings.update_time
+            }
+        }
+        
+        await manager.broadcast_to_class(class_id, broadcast_data)
         
         await db.commit()
         print(f"事务已提交")

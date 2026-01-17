@@ -197,7 +197,7 @@
                 <h3 class="panel-title">🌟 优秀辩手排行榜</h3>
                 <div class="rank-list-max">
                   <div 
-                    v-for="(debater, index) in contestResults.debater_rankings.slice(0, 4)" 
+                    v-for="(debater, index) in contestResults.debater_rankings" 
                     :key="debater.debater_id"
                     class="rank-row"
                     :class="'rank-' + (index + 1)"
