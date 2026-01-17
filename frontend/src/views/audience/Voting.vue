@@ -387,6 +387,13 @@ onMounted(async () => {
   
   // 连接 WebSocket
   systemStore.connectWebSocket()
+  
+  // 监听比赛更新事件
+  window.addEventListener('debate-contest-update', handleContestUpdate)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('debate-contest-update', handleContestUpdate)
 })
 
 // 监听系统状态变化
@@ -583,6 +590,24 @@ function getVotingInstruction() {
 function handleLogout() {
   authStore.logout()
   router.push('/login')
+}
+
+function handleContestUpdate(event) {
+  console.log('观众端收到比赛更新:', event.detail)
+  const newContest = event.detail
+  
+  // 更新比赛信息
+  if (newContest) {
+    contestInfo.value = newContest
+    // 重新加载投票记录
+    loadMyVotes()
+  } else {
+    // 比赛被重置，清空数据
+    contestInfo.value = null
+    myVotes.value = {}
+    debateResults.value = null
+    ElMessage.info('系统已重置，等待新比赛')
+  }
 }
 </script>
 

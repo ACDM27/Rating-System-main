@@ -324,7 +324,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, reactive, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../stores/auth'
@@ -377,6 +377,13 @@ onMounted(async () => {
   await loadDebaters()
   await loadSubmittedScores()
   await systemStore.fetchState()
+  
+  // 监听比赛更新事件
+  window.addEventListener('debate-contest-update', handleContestUpdate)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('debate-contest-update', handleContestUpdate)
 })
 
 // 监听系统状态变化
@@ -544,6 +551,25 @@ function handleLogout() {
   authStore.logout()
   systemStore.disconnect()
   router.push('/login')
+}
+
+function handleContestUpdate(event) {
+  console.log('评委端收到比赛更新:', event.detail)
+  const newContest = event.detail
+  
+  // 更新比赛信息
+  if (newContest) {
+    contestInfo.value = newContest
+    // 重新加载辩手和评分记录
+    loadDebaters()
+    loadSubmittedScores()
+  } else {
+    // 比赛被重置，清空数据
+    contestInfo.value = null
+    allDebaters.value = []
+    submittedScores.value = []
+    ElMessage.info('系统已重置，等待新比赛')
+  }
 }
 </script>
 
